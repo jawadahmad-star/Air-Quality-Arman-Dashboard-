@@ -20,3 +20,4 @@ site/
 Thumbs.db
 Desktop.ini
 .claude/
+build_cards.json

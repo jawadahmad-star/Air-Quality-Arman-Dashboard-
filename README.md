@@ -11,7 +11,8 @@ purifiers, Lahore).
 | File | Role |
 |---|---|
 | `index.html` | The built dashboard. The only file GitHub Pages serves. All data inside is **AES-256-GCM encrypted**; it is unreadable without the password. |
-| `dashboard_template.html` | Layout, charts and password gate. |
+| `dashboard_template.html` | Layout, charts, navigation and password gate. |
+| `dashboard_text.py` | Plain-language chart titles, descriptions and "how to read this" notes. |
 | `build_dashboard.py` | Reads the SurveyCTO export, computes every aggregate, encrypts and writes `index.html`. |
 | `update_dashboard.bat` | One-click refresh: rebuild, check nothing sensitive is staged, commit, push. |
 | `CNAME`, `.nojekyll` | GitHub Pages custom domain and config. |

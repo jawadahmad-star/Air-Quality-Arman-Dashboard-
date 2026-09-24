@@ -39,6 +39,8 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import dashboard_text as TX
 ROOT = HERE.parent
 DATA_DIR = Path(os.environ["AQP_DATA_DIR"]) if os.environ.get("AQP_DATA_DIR") else ROOT / "Data"
 TPL = HERE / "dashboard_template.html"
@@ -627,7 +629,7 @@ def f_hist(getter, edges, labels):
             return None
         cats = pd.cut(s, bins=edges, labels=False, right=False, include_lowest=True)
         cnt = [int((cats == i).sum()) for i in range(len(labels))]
-        return {"items": items(labels, cnt, base), "base": base}
+        return {"items": items(labels, cnt, base), "base": base, "hist": True}
     return fn
 
 
@@ -1115,9 +1117,9 @@ def wtp_kpis(df):
     return [
         K("💰", fmt_rs(avg(b)), "Mean Willingness to Pay", f"Median {fmt_rs(med(b))}", "up", "green"),
         K("🙋", fmt_p(sh(b, lambda s: s > 0)), "Bid Above Zero", f"{fmt_p(sh(b, lambda s: s >= 2000))} bid the Rs 2,000 maximum", "neutral", "teal"),
-        K("🎯", fmt_rs(tp), "Price Clearing the 30% Threshold", "Highest price at which 30% still contribute", "up", "purple"),
+        K("🎯", fmt_rs(tp), "Highest Price 3 in 10 Would Pay", "The classroom needs 30% of parents to contribute", "up", "purple"),
         K("🔄", fmt_p(sh(num(df, "change_pay"), lambda s: s == 1)), "Revised Their Bid", f"Mean bid {fmt_rs(avg(df['_bid0']))} → {fmt_rs(avg(b))}", "neutral", "amber"),
-        K("🎲", fmt_p(pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None), "Would Have Contributed", "Bid at or above the random draw", "navy", "navy"),
+        K("🎲", fmt_p(pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None), "Would Have Paid", "Bid was at or above the random price drawn", "navy", "navy"),
         K("💸", fmt_rs(avg(df["_paid"])), "Mean Amount Paid", "Realised by the random-price rule", "navy", ""),
     ]
 
@@ -1201,7 +1203,7 @@ PANELS.append({
             card("lines", "wtDemand", "Demand curve", "Share of parents willing to contribute at least each price; the dashed line is the 30% needed for a purifier", SD(d_demand), opt={"yfmt": "pct", "max": 100, "xtitle": "Contribution price", "ytitle": "% willing to contribute"}, tall=True),
             card("hbar", "wtGroup", "Mean bid by respondent group", "Mean final bid with 95% confidence interval; not affected by the segment selector", wtp_groups(), opt={"grouped": True}, tall=True, auto=True)]},
         {"t": "grid", "cols": 3, "cards": [
-            card("bar", "wtOthers", "What parents expect other parents to do", "Average expected split of the other parents in the class, % of class", SD(others_belief), opt={"color": 5, "fmt": "num1", "sfx": "%"}),
+            card("hbar", "wtOthers", "What parents expect other parents to do", "Average expected split of the other parents in the class, % of class", SD(others_belief), opt={"color": 5, "fmt": "num1", "sfx": "%"}),
             card("donut", "wtChange", "Revised their bid after seeing the result", "Would you like to change how much you are willing to contribute?", SD(f_dist("change_pay", "yesno")), var="change_pay", opt={"colors": [4, "muted"]}),
             card("donut", "wtCertain", "Certainty about the bid", "How certain parents are of their choice", SD(f_dist("certain_choice", "choice", drop_zero=True)), var="certain_choice", opt={"colors": [6, 3, 1, 4, "muted"]})]},
         {"t": "grid", "cols": 2, "cards": [
@@ -1257,7 +1259,9 @@ for cname, fa, fb in CMPS:
                          "diff": {"v": r1(w["diff"] * k_), "t": fmt_d(w["diff"] * k_)},
                          "ci": {"v": r1(w["lo"] * k_), "t": f"{fmt_d(w['lo'] * k_)} to {fmt_d(w['hi'] * k_)}"},
                          "p": {"v": round(w["p"], 3), "t": f"{w['p']:.2f}" if w["p"] >= 0.01 else "<0.01", "sig": bool(w["p"] < 0.05)},
-                         "n": f"{w['na']} / {w['nb']}"})
+                         "n": f"{w['na']} / {w['nb']}",
+                         "v": {"v": round(w["p"], 3), "t": "Clear difference" if w["p"] < 0.05 else ("Possible difference" if w["p"] < 0.10 else "No clear difference"),
+                               "tone": "good" if w["p"] < 0.05 else ("amber" if w["p"] < 0.10 else "grey")}})
 
 # balance table
 BAL = [("Age (mean, years)", "num", lambda d: d["_age"]),
@@ -1280,7 +1284,8 @@ for name, kind, getter in BAL:
     else:
         vals = [avg(g) for g in groups]; p_ = anova_p(groups); t = lambda x: "—" if x is None else f"{x:.1f}"
     bal_rows.append({"o": name, "c": {"v": vals[0], "t": t(vals[0])}, "v1": {"v": vals[1], "t": t(vals[1])}, "v2": {"v": vals[2], "t": t(vals[2])},
-                     "p": {"v": None if p_ is None else round(p_, 3), "t": "—" if p_ is None else f"{p_:.2f}", "flag": bool(p_ is not None and p_ < 0.10)}})
+                     "p": {"v": None if p_ is None else round(p_, 3), "t": "—" if p_ is None else f"{p_:.2f}", "flag": bool(p_ is not None and p_ < 0.10)},
+                     "v": {"v": 1 if (p_ is not None and p_ < 0.10) else 0, "t": "Check" if (p_ is not None and p_ < 0.10) else "Similar", "tone": "amber" if (p_ is not None and p_ < 0.10) else "good"}})
 n_imb = sum(1 for r in bal_rows if r["p"]["flag"])
 
 ci_arm = {"rows": [], "unit": "Rs"}
@@ -1305,8 +1310,8 @@ if len(dem_arm["series"]) < 2:
     dem_arm = None
 ci_arm = ci_arm if ci_arm["rows"] else None
 ci_ord = ci_ord if ci_ord["rows"] else None
-bal_data = {"cols": [{"k": "o", "l": "Characteristic"}, {"k": "c", "l": "Control", "num": True}, {"k": "v1", "l": "Video 1", "num": True}, {"k": "v2", "l": "Video 2", "num": True}, {"k": "p", "l": "p-value", "num": True, "pflag": True}], "rows": bal_rows} if N_C >= 3 else None
-eff_data = {"cols": [{"k": "o", "l": "Outcome"}, {"k": "a", "l": "Comparison group", "num": True}, {"k": "b", "l": "Treatment group", "num": True}, {"k": "diff", "l": "Difference", "num": True}, {"k": "ci", "l": "95% CI", "num": True}, {"k": "p", "l": "p-value", "num": True, "psig": True}, {"k": "n", "l": "n (comparison / treatment)", "num": True}], "rows": eff_rows} if eff_rows else None
+bal_data = {"cols": [{"k": "o", "l": "Characteristic"}, {"k": "c", "l": "Control", "num": True}, {"k": "v1", "l": "Video 1", "num": True}, {"k": "v2", "l": "Video 2", "num": True}, {"k": "p", "l": "Chance it is luck (p-value)", "num": True, "pflag": True}, {"k": "v", "l": "Groups look", "verdict": True}], "rows": bal_rows, "read": (f"<strong>{n_imb}</strong> of {len(bal_rows)} characteristics differ between groups at the 10% level." if n_imb else f"The three groups look alike on all {len(bal_rows)} characteristics.")} if N_C >= 3 else None
+eff_data = {"cols": [{"k": "o", "l": "Outcome"}, {"k": "a", "l": "Comparison group", "num": True}, {"k": "b", "l": "Treatment group", "num": True}, {"k": "diff", "l": "Difference", "num": True}, {"k": "ci", "l": "Likely range (95% CI)", "num": True}, {"k": "p", "l": "Chance it is luck (p-value)", "num": True, "psig": True}, {"k": "v", "l": "Result", "verdict": True}, {"k": "n", "l": "n (comparison / treatment)", "num": True}], "rows": eff_rows, "read": f"<strong>{sum(1 for r in eff_rows if r['p']['sig'])}</strong> of {len(eff_rows)} comparisons show a clear difference (p below 0.05). Everything else could be chance at this sample size."} if eff_rows else None
 
 te_ins = [
     {"cls": "navy", "html": f"<strong>Randomisation:</strong> " + (f"<strong>{n_imb}</strong> of {len(bal_rows)} background characteristics differ across arms at the 10% level: expected by chance in roughly one in ten, but worth a look if it grows." if n_imb else f"none of the {len(bal_rows)} background characteristics differ across arms at the 10% level, so the three groups look comparable.")},
@@ -1386,7 +1391,7 @@ PANELS.append({
 def time_kpis(df):
     disc = df["_disc"]
     return [
-        K("⏳", f"{med(disc):.0f}%" if med(disc) is not None else "—", "Median Implied Annual Discount Rate", "Reward demanded to wait one year", "neutral", "navy"),
+        K("⏳", f"{med(disc):.0f}%" if med(disc) is not None else "—", "Extra Wanted to Wait a Year", "Typical yearly return parents ask for (median)", "neutral", "navy"),
         K("🐢", r1(avg(num(df, "tp_qual"))) or "—", "Patience Score (0–10)", "10 = very willing to give up something today", "up", "teal"),
         K("🛑", fmt_p(sh(num(df, "tp1"), lambda s: s == 1)), "Take Rs 2,000 Today over ~Rs 4,100", "First question, one year later", "neutral", "amber"),
         K("✔️", fmt_p(sh(num(df, "tp_check"), lambda s: s == 1)), "Consistent Check Answers", "Prefer 2,000 today to 2,000 in a year", "up", "green"),
@@ -1455,8 +1460,50 @@ PANELS.append({
         {"t": "note", "html": "One row per household ID in the frame. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},
     ]})
 
+# ====================================================================== plain-language layer
+_TEXT = TX.card_text(N_TARGET)
+GUIDE = []
+
+
+def _all_cards():
+    for p in PANELS:
+        for b in p["blocks"]:
+            if b["t"] == "grid":
+                for c in b["cards"]:
+                    yield p, c
+
+
+for p in PANELS:
+    p["tab"] = TX.TABS.get(p["id"], p["tab"])
+    p["short"] = TX.SHORT.get(p["id"], "")
+    if p["id"] in TX.PANEL_TITLE:
+        p["title"] = TX.PANEL_TITLE[p["id"]]
+
+_TPL = {"faPrio": "Ranked first or second most often: <strong>{l}</strong> ({p:.0f}% of parents)."}
+for p, c in _all_cards():
+    t = _TEXT.get(c["id"])
+    if t:
+        c["title"], c["desc"], _ur, hk = t
+        if hk:
+            c["help"] = hk
+    else:
+        _ur = ""
+    if c["id"] in _TPL:
+        c.setdefault("opt", {})["tpl"] = _TPL[c["id"]]
+    dd = c["d"]
+    targets = list(dd["_s"].values()) if isinstance(dd, dict) and "_s" in dd else [dd]
+    for v in targets:
+        if isinstance(v, dict) and "read" not in v:
+            rd = TX.auto_read(c["kind"], v, c.get("opt"), c["id"])
+            if rd:
+                v["read"] = rd
+    GUIDE.append({"panel": p["title"], "tab": p["tab"], "id": c["id"], "kind": c["kind"], "title": c["title"], "desc": c["desc"],
+                  "var": c.get("var", ""), "ur": _ur, "help": c.get("help", "")})
+(HERE / "build_cards.json").write_text(json.dumps({"panels": [{"id": p["id"], "title": p["title"], "eyebrow": p["eyebrow"], "blurb": p["blurb"]} for p in PANELS], "cards": GUIDE}, ensure_ascii=False, indent=1), encoding="utf-8")
+DATA_HELP = {"help": TX.HELP, "generic": TX.GENERIC}
+
 # ====================================================================== payload, PII scan, encrypt
-DATA = {"meta": META, "segments": SEG_META, "panels": PANELS}
+DATA = {"meta": META, "segments": SEG_META, "panels": PANELS, "help": TX.HELP, "generic": TX.GENERIC}
 
 
 def clean(o):
