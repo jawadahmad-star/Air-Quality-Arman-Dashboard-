@@ -811,10 +811,10 @@ overview = {
         {"t": "kpis", "d": ov_kpis},
         {"t": "callouts", "d": ov_callouts},
         {"t": "insights", "d": kf, "row": False},
-        {"t": "grid", "cols": 2, "cards": [
+        {"t": "grid", "cols": 1, "cards": [
             card("lines", "ovDaily", "Daily Completed Interviews", "Completed interviews per field day",
                  {"x": [x["d"] for x in daily], "series": [{"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True}]},
-                 opt={"yfmt": "n"}, tall=True)]},
+                 opt={"yfmt": "n"}, full=True)]},
         {"t": "grid", "cols": 3, "cards": [
             card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
             card("donut", "ovArm", "Completed by Study Arm", "Control · Video 1 · Video 2",
@@ -1507,28 +1507,7 @@ PANELS.append({
         {"t": "note", "html": "One row per household ID in the frame. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},
     ]})
 
-# ---- tabs removed on request; their two most useful charts move to the overview
-def _take(panel_id, card_id):
-    for _p in PANELS:
-        if _p["id"] == panel_id:
-            for _b in _p["blocks"]:
-                if _b["t"] == "grid":
-                    for _c in _b["cards"]:
-                        if _c["id"] == card_id:
-                            return _c
-    return None
-
-
-_pace, _agree = _take("ops", "opsCum"), _take("fair", "faAgree")
-for _b in overview["blocks"]:
-    if _b["t"] == "grid" and any(c["id"] == "ovDaily" for c in _b["cards"]) and _pace:
-        _pace["full"] = False
-        _b["cards"].append(_pace)
-if _agree:
-    _agree["full"] = True
-    _ix = next(i for i, b in enumerate(overview["blocks"]) if b["t"] == "note")
-    overview["blocks"].insert(_ix, {"t": "grid", "cols": 1, "cards": [_agree]})
-    overview["seg"] = False
+# ---- tabs removed on request (Field Ops, Fairness, Patience)
 PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
 for _r in qa_rows:
     if _r["n"]:
