@@ -47,7 +47,7 @@ copy dashboard.config.example.json dashboard.config.json   (then set the passwor
 
 ## Study design the dashboard follows
 
-Government schools → classes 4, 5 and 6 → the parents of each class (about 1,200–1,300 households in about 30 classes across 8–10 schools).
+Government schools → classes 4, 5 and 6 → the parents of each class (roughly 1,200–1,300 households; the number of schools and classes can be anything, the dashboard adapts).
 Parents are phoned from the school list and visited by appointment. A classroom gets a purifier only if at least **30% of that class's own parents**
 end up contributing (random price at or below their bid; parents not interviewed do not count). The **Classrooms** tab applies that rule class by class.
 

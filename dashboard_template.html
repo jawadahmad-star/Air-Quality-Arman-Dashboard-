@@ -240,6 +240,7 @@
     .pill-flag { display:inline-block; margin:1px 4px 1px 0; padding:2px 8px; border-radius:99px; font-size:10.5px; font-weight:600; background:var(--tint-amber); color:var(--on-tint-amber); white-space:nowrap; }
     .p-sig { font-weight:800; color:var(--text); background:var(--tint-teal); padding:2px 8px; border-radius:8px; }
     .p-flag { font-weight:700; color:var(--on-tint-amber); background:var(--tint-amber); padding:2px 8px; border-radius:8px; }
+    .best { font-weight:800; color:var(--on-tint-green); background:var(--tint-green); padding:3px 10px; border-radius:8px; }
     .vd { display:inline-block; padding:3px 10px; border-radius:99px; font-size:11px; font-weight:700; white-space:nowrap; }
     .vd-good { background:var(--tint-green); color:var(--on-tint-green); }
     .vd-amber { background:var(--tint-amber); color:var(--on-tint-amber); }
@@ -568,7 +569,8 @@ let DATA = null, SEG = 'all', current = null;
 const dirty = new Set();
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const sv = x => (x && typeof x === 'object' && !Array.isArray(x) && x._s) ? x._s[SEG] : x;
+let EFF_SEG = 'all';                                   // the segment that applies to the panel being drawn (panels without a filter always use 'all')
+const sv = x => (x && typeof x === 'object' && !Array.isArray(x) && x._s) ? x._s[EFF_SEG] : x;
 const CV = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const S = i => CV('--series-' + i);
 const TXT = () => CV('--text-2') || '#475569';
@@ -692,7 +694,7 @@ function linesChart(id, c, d){
   const yMax = o.max || (o.target ? o.target * 1.08 : undefined);
   mk(id, {type:'line', data:{labels:d.x, datasets:ds},
     options:baseOpts({ interaction:{mode:'index', intersect:false}, layout:{padding:{top:22, right:14}},
-      plugins:{legend:{position:nw?'bottom':'top',align:nw?'start':'end',labels:{font:{family:'Inter',size:nw?11:12},color:TXT(),boxWidth:14,padding:nw?8:12}},
+      plugins:{legend:{display:d.series.length > 1, position:nw?'bottom':'top',align:nw?'start':'end',labels:{font:{family:'Inter',size:nw?11:12},color:TXT(),boxWidth:14,padding:nw?8:12}},
         tooltip:{callbacks:{label:x => x.raw == null ? null : ' ' + x.dataset.label + ': ' + x.raw.toLocaleString() + sfx}}},
       scales:{x:{ticks:{font:tickFont(),color:TXT(),maxTicksLimit:nw ? 5 : (d.x.length > 22 ? 12 : (o.xtitle ? 9 : 22)),autoSkip:true,maxRotation:0}, grid:{display:false}, border:{display:false},
                  title:{display:!!o.xtitle,text:o.xtitle||'',font:{family:'Inter',size:11,weight:'600'},color:TXT()}},
@@ -715,37 +717,24 @@ function likertChart(id, c, d){
               y:{stacked:true, ticks:{font:{family:'Inter',size:nw?11:11.5,weight:'600'},color:TXT(),autoSkip:false,callback:function(v){ return wrapTick(this.getLabelForValue(v), tight ? 26 : 44); }}, grid:{display:false}, border:{display:false}}}}) });
 }
 
-/* mean with 95% CI: bars plus whiskers, group headings as label-only rows */
+/* grouped bars: average per group, group headings as label-only rows */
 function ciChart(id, c, d){
   const rows = []; let lastG = null; const tight = cardW(id) < 460;
   d.rows.forEach(r => { if (r.g !== lastG){ rows.push({head:true, l:r.g}); lastG = r.g; } rows.push(r); });
-  fitHeight(id, rows.length, tight ? 30 : 30, 58);
-  const hiMax = Math.max(...d.rows.map(r => r.hi != null ? r.hi : r.m)), step = Math.pow(10, Math.floor(Math.log10(hiMax))) / 2;
-  const xMax = Math.ceil(hiMax * 1.03 / step) * step;
+  fitHeight(id, rows.length, 30, 58);
+  const maxV = Math.max(...d.rows.map(r => r.m)), step = Math.pow(10, Math.floor(Math.log10(maxV))) / 2;
+  const xMax = Math.ceil(maxV * 1.02 / step) * step;
   const colors = rows.map(r => r.head ? 'rgba(0,0,0,0)' : col(r.slot));
-  const plugin = {id:'ciWhisk', afterDatasetsDraw(ch){
-    const {ctx, scales:{x}} = ch, meta = ch.getDatasetMeta(0);
-    ctx.save(); ctx.strokeStyle = CV('--text'); ctx.lineWidth = 1.6; ctx.fillStyle = CV('--text-2'); ctx.font = '600 ' + (tight ? 10 : 11) + 'px Inter'; ctx.textBaseline = 'middle';
-    rows.forEach((r, i) => {
-      if (r.head) return;
-      const y = meta.data[i].y, xm = x.getPixelForValue(r.m);
-      let xe = xm;
-      if (r.lo != null && r.hi != null){
-        const xl = x.getPixelForValue(Math.max(r.lo, 0)), xh = x.getPixelForValue(r.hi); xe = xh;
-        ctx.beginPath(); ctx.moveTo(xl, y); ctx.lineTo(xh, y); ctx.moveTo(xl, y-5); ctx.lineTo(xl, y+5); ctx.moveTo(xh, y-5); ctx.lineTo(xh, y+5); ctx.stroke();
-      }
-      ctx.fillText('Rs ' + Math.round(r.m).toLocaleString() + (tight ? '' : ' · n=' + r.n), xe + 8, y);
-    });
-    ctx.restore(); }};
   mk(id, {type:'bar',
-    data:{labels:rows.map(r => r.l), datasets:[{data:rows.map(r => r.head ? null : r.m), backgroundColor:colors.map(cc => cc.startsWith('#') ? alpha(cc, .78) : cc), borderRadius:5, barThickness:16}]},
-    options:baseOpts({ indexAxis:'y', layout:{padding:{right:tight ? 62 : 104, top:6}},
-      plugins:{legend:{display:false}, datalabels:{display:false},
-        tooltip:{filter:x => !rows[x.dataIndex].head, callbacks:{label:x => { const r = rows[x.dataIndex]; return ' Average Rs ' + Math.round(r.m).toLocaleString() + (r.lo != null ? '  (likely range Rs ' + Math.round(r.lo).toLocaleString() + ' to ' + Math.round(r.hi).toLocaleString() + ')' : '') + '  ·  n = ' + r.n; }}}},
-      scales:{x:{beginAtZero:true, max:xMax, ticks:{font:tickFont(),color:TXT(),maxRotation:0,autoSkip:true,maxTicksLimit:tight ? 4 : 7,callback:v => 'Rs ' + v.toLocaleString()}, grid:{color:GRID()}, border:{display:false}},
+    data:{labels:rows.map(r => r.l), datasets:[{data:rows.map(r => r.head ? null : r.m), backgroundColor:colors.map(cc => cc.startsWith('#') ? alpha(cc, .85) : cc), borderRadius:5, barThickness:16}]},
+    options:baseOpts({ indexAxis:'y', layout:{padding:{right:tight ? 56 : 92, top:6}},
+      plugins:{legend:{display:false},
+        datalabels:{display:ctx => !rows[ctx.dataIndex].head, anchor:'end', align:'right', clamp:true, clip:false, color:TXT(), font:{family:'Inter',size:tight ? 10 : 11,weight:'700'},
+                    formatter:(v, ctx) => 'Rs ' + Math.round(v).toLocaleString() + (tight ? '' : '  · n=' + rows[ctx.dataIndex].n)},
+        tooltip:{filter:x => !rows[x.dataIndex].head, callbacks:{label:x => { const r = rows[x.dataIndex]; return ' Average Rs ' + Math.round(r.m).toLocaleString() + '  ·  n = ' + r.n; }}}},
+      scales:{x:{beginAtZero:true, max:xMax, ticks:{font:tickFont(),color:TXT(),maxRotation:0,autoSkip:true,maxTicksLimit:tight ? 4 : 5,callback:v => 'Rs ' + v.toLocaleString()}, grid:{color:GRID()}, border:{display:false}},
               y:{grid:{display:false}, border:{display:false}, ticks:{autoSkip:false, font:ctx => ({family:'Inter', size:tight ? 10.5 : 11.5, weight: rows[ctx.index] && rows[ctx.index].head ? '800' : '500'}),
-                 color:ctx => rows[ctx.index] && rows[ctx.index].head ? CV('--text') : TXT(), callback:function(v){ const r = rows[v]; return r ? (r.head ? r.l : (tight ? '' : '   ') + r.l) : ''; }}}}}),
-    plugins:[plugin]});
+                 color:ctx => rows[ctx.index] && rows[ctx.index].head ? CV('--text') : TXT(), callback:function(v){ const r = rows[v]; return r ? (r.head ? r.l : (tight ? '' : '   ') + r.l) : ''; }}}}})});
 }
 
 // ============================================================
@@ -817,6 +806,7 @@ function tableCardHTML(c, d){
     const x = r[cl.k], t = cellT(x);
     if (cl.flags) return `<td class="left">${(t && t.length) ? t.map(f => `<span class="pill-flag">${esc(f)}</span>`).join('') : '<span class="badge badge-green">✓ none</span>'}</td>`;
     if (cl.verdict) return `<td class="left"><span class="vd vd-${esc(x.tone)}">${({good:'✓ ', amber:'⚑ ', info:'↗ ', bad:'✕ '})[x.tone] || ''}${esc(t)}</span></td>`;
+    if (cl.hl) return `<td class="num">${x.best ? `<span class="best">${esc(t)}</span>` : esc(t)}</td>`;
     if (cl.psig) return `<td class="num">${x.sig ? `<span class="p-sig">${esc(t)}</span>` : esc(t)}</td>`;
     if (cl.pflag) return `<td class="num">${x.flag ? `<span class="p-flag">⚑ ${esc(t)}</span>` : esc(t)}</td>`;
     return `<td class="${cl.num ? 'num' : 'left mz-strong'}">${esc(t)}</td>`;
@@ -843,7 +833,7 @@ function toRows(c, d){
   if (!d) return null;
   switch (c.kind){
     case 'bar': case 'hbar': case 'donut':
-      if (isCI(c)) return {head:['Group','Category','Average (Rs)','Range low','Range high','n'], rows:d.rows.map(r => [r.g, r.l, r.m, r.lo, r.hi, r.n])};
+      if (isCI(c)) return {head:['Group','Category','Average (Rs)','n'], rows:d.rows.map(r => [r.g, r.l, r.m, r.n])};
       return {head:['Category','n','%','Value'], rows:d.items.map(i => [i.l, i.n, i.p, i.v != null ? i.v : ''])};
     case 'likert': return {head:['Item', ...d.cats, 'n'], rows:d.rows.map(r => [r.l, ...r.p.map(p => p + '%'), r.n])};
     case 'lines': return {head:['', ...d.series.map(s => s.name)], rows:d.x.map((x, i) => [x, ...d.series.map(s => s.y[i] == null ? '' : s.y[i])])};
@@ -1044,6 +1034,7 @@ function blockHTML(b){
 
 function renderPanel(id){
   const p = DATA.panels.find(x => x.id === id); if (!p) return;
+  EFF_SEG = p.seg ? SEG : 'all';
   const el = $('panel-' + id);
   el.querySelectorAll('canvas').forEach(c => { const ch = Chart.getChart(c); if (ch) ch.destroy(); });
   dirty.delete(id);

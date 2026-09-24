@@ -73,7 +73,6 @@ FIELD_HOURS = tuple(CFG.get("field_hours", [7, 21]))
 MIN_CELL = int(CFG.get("small_cell_min", 5))
 PREFER = CFG.get("prefer", "dta")
 ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
-USE_REVISED = bool(CFG.get("use_revised_bid_for_draw", True))   # class outcome uses the revised bid + new draw when a parent changed their bid
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.30))
 
 # columns that identify a person, a household or a device: dropped on load
@@ -83,142 +82,6 @@ PII_EXACT = {"fname", "lname", "address", "phone_mobile", "phone_landline", "mob
              "dec_maker_o", "gender_o", "primary_source_o", "measure_air_pollution_o", "actions_protect_c_o",
              "travel_school_o", "more_pay_o", "text_audit"}
 PII_PREFIX = ("geo_", "gps", "phone", "mobile_number")
-
-
-# ====================================================================== statistics (no scipy)
-def _betacf(a, b, x):
-    tiny, qab, qap, qam = 1e-30, a + b, a + 1.0, a - 1.0
-    c, d = 1.0, 1.0 - qab * x / qap
-    d = 1.0 / (d if abs(d) > tiny else tiny)
-    h = d
-    for m in range(1, 300):
-        m2 = 2 * m
-        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
-        d = 1.0 + aa * d; d = d if abs(d) > tiny else tiny
-        c = 1.0 + aa / c; c = c if abs(c) > tiny else tiny
-        d = 1.0 / d; h *= d * c
-        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
-        d = 1.0 + aa * d; d = d if abs(d) > tiny else tiny
-        c = 1.0 + aa / c; c = c if abs(c) > tiny else tiny
-        d = 1.0 / d; delta = d * c; h *= delta
-        if abs(delta - 1.0) < 3e-12:
-            break
-    return h
-
-
-def betai(a, b, x):
-    if x <= 0:
-        return 0.0
-    if x >= 1:
-        return 1.0
-    bt = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log(1 - x))
-    if x < (a + 1) / (a + b + 2):
-        return bt * _betacf(a, b, x) / a
-    return 1 - bt * _betacf(b, a, 1 - x) / b
-
-
-def gammq(a, x):
-    """upper regularised incomplete gamma Q(a, x)"""
-    if x <= 0:
-        return 1.0
-    if x < a + 1:
-        ap, s, dl = a, 1.0 / a, 1.0 / a
-        for _ in range(500):
-            ap += 1; dl *= x / ap; s += dl
-            if abs(dl) < abs(s) * 1e-13:
-                break
-        return 1 - s * math.exp(-x + a * math.log(x) - math.lgamma(a))
-    tiny = 1e-30
-    b = x + 1 - a; c = 1 / tiny; d = 1 / b; h = d
-    for i in range(1, 500):
-        an = -i * (i - a); b += 2
-        d = an * d + b; d = d if abs(d) > tiny else tiny
-        c = b + an / c; c = c if abs(c) > tiny else tiny
-        d = 1 / d; de = d * c; h *= de
-        if abs(de - 1) < 1e-13:
-            break
-    return math.exp(-x + a * math.log(x) - math.lgamma(a)) * h
-
-
-def t_pvalue(t, df):
-    return betai(df / 2.0, 0.5, df / (df + t * t)) if df > 0 else float("nan")
-
-
-def f_pvalue(F, d1, d2):
-    return betai(d2 / 2.0, d1 / 2.0, d2 / (d2 + d1 * F)) if F >= 0 and d1 > 0 and d2 > 0 else float("nan")
-
-
-def chi2_pvalue(x, k):
-    return gammq(k / 2.0, x / 2.0)
-
-
-def tcrit(df):
-    if df < 1:
-        return float("nan")
-    lo, hi = 0.0, 200.0
-    for _ in range(80):
-        mid = (lo + hi) / 2
-        (lo, hi) = (mid, hi) if t_pvalue(mid, df) > 0.05 else (lo, mid)
-    return (lo + hi) / 2
-
-
-def mean_ci(x):
-    x = np.asarray(pd.Series(x).dropna(), float)
-    n = len(x)
-    if n == 0:
-        return None
-    m = float(x.mean())
-    if n < 2:
-        return {"m": m, "lo": None, "hi": None, "n": n}
-    se = float(x.std(ddof=1)) / math.sqrt(n)
-    tc = tcrit(n - 1)
-    return {"m": m, "lo": m - tc * se, "hi": m + tc * se, "n": n}
-
-
-def welch(a, b):
-    """difference b - a, Welch t-test. returns dict or None"""
-    a = np.asarray(pd.Series(a).dropna(), float); b = np.asarray(pd.Series(b).dropna(), float)
-    if len(a) < 3 or len(b) < 3:
-        return None
-    va, vb = a.var(ddof=1) / len(a), b.var(ddof=1) / len(b)
-    se = math.sqrt(va + vb)
-    diff = float(b.mean() - a.mean())
-    if se == 0:
-        return {"diff": diff, "lo": diff, "hi": diff, "p": 1.0 if diff == 0 else 0.0, "na": len(a), "nb": len(b)}
-    df = (va + vb) ** 2 / ((va ** 2) / (len(a) - 1) + (vb ** 2) / (len(b) - 1))
-    tc = tcrit(df)
-    return {"diff": diff, "lo": diff - tc * se, "hi": diff + tc * se, "p": t_pvalue(diff / se, df),
-            "na": len(a), "nb": len(b)}
-
-
-def anova_p(groups):
-    gs = [np.asarray(pd.Series(g).dropna(), float) for g in groups]
-    gs = [g for g in gs if len(g) >= 2]
-    if len(gs) < 2:
-        return None
-    n = sum(len(g) for g in gs); k = len(gs)
-    grand = np.concatenate(gs).mean()
-    ssb = sum(len(g) * (g.mean() - grand) ** 2 for g in gs)
-    ssw = sum(((g - g.mean()) ** 2).sum() for g in gs)
-    if ssw == 0 or n - k <= 0:
-        return None
-    return f_pvalue((ssb / (k - 1)) / (ssw / (n - k)), k - 1, n - k)
-
-
-def chi2_p(flags_by_group):
-    """flags_by_group: list of 0/1 arrays, one per arm"""
-    fl = [np.asarray(pd.Series(g).dropna(), float) for g in flags_by_group]
-    fl = [g for g in fl if len(g)]
-    if len(fl) < 2:
-        return None
-    tot = sum(len(g) for g in fl); ones = sum(g.sum() for g in fl)
-    if ones == 0 or ones == tot:
-        return None
-    chi = 0.0
-    for g in fl:
-        e1 = len(g) * ones / tot; e0 = len(g) - e1
-        chi += (g.sum() - e1) ** 2 / e1 + ((len(g) - g.sum()) - e0) ** 2 / e0
-    return chi2_pvalue(chi, len(fl) - 1)
 
 
 # ====================================================================== load
@@ -515,14 +378,16 @@ say(f"Excluded  : {n_out_of_frame} completed row(s) outside the frame, {n_dup_ro
 C["_bid0"] = num(C, "contribute_will")
 _chg = (num(C, "change_pay") == 1) & num(C, "change_pay_w").notna()
 C["_bid"] = np.where(_chg, num(C, "change_pay_w"), C["_bid0"])
+_fb, _fr = num(C, "final_bid"), num(C, "final_rand_number")          # the questionnaire's own final bid / final draw (used when present)
+C["_bid"] = np.where(_fb.notna(), _fb, C["_bid"])
 C["_bid"] = pd.to_numeric(C["_bid"], errors="coerce")
 C["_bonus"] = num(C, "contribute_will_bonus")
-# the draw that decides whether a parent contributes: the revised bid meets the new random number,
-# otherwise the original bid meets the first one (config: use_revised_bid_for_draw)
+# the draw that decides whether a parent contributes: final_bid vs final_rand_number from the form;
+# for older exports without them, the revised bid meets the new random number, otherwise the original bid meets the first one
 _r0, _r1 = num(C, "main_contribute_rand_number"), num(C, "change_rand_number")
-_use_new = _chg & _r1.notna() & USE_REVISED
-C["_rand"] = np.where(_use_new, _r1, _r0)
-C["_bid_d"] = np.where(_use_new, C["_bid"], C["_bid0"])
+_use_new = _chg & _r1.notna()
+C["_rand"] = np.where(_fr.notna(), _fr, np.where(_use_new, _r1, _r0))
+C["_bid_d"] = C["_bid"]
 C["_bid_d"] = pd.to_numeric(C["_bid_d"], errors="coerce")
 _ok = C["_rand"].notna() & C["_bid_d"].notna()
 C["_paid"] = np.where(_ok, np.where(C["_rand"] <= C["_bid_d"], C["_rand"], 0), np.nan)
@@ -729,24 +594,6 @@ def top2(s, codes):
     return pct(int(s.isin(codes).sum()), len(s)) if len(s) else None
 
 
-PRICES = list(range(0, 2001, 100))
-
-
-def demand(bids):
-    b = pd.Series(bids).dropna()
-    if not len(b):
-        return None
-    return [pct(int((b >= p).sum()), len(b)) for p in PRICES]
-
-
-def thr_price(bids, share=0.30):
-    b = np.sort(np.asarray(pd.Series(bids).dropna(), float))[::-1]
-    if not len(b):
-        return None
-    k = max(int(math.ceil(share * len(b))), 1)
-    return float(b[k - 1])
-
-
 # ====================================================================== PANEL 1 - OVERVIEW
 PANELS = []
 a = D.copy()
@@ -819,6 +666,7 @@ disp = [{"l": l, "n": int((D["_status"] == v).sum())} for v, l in disp_codes]
 disp = [x for x in disp if x["n"]]
 for x in disp:
     x["p"] = pct(x["n"], N_ATT)
+    x["lab"] = f"{x['n']:,} · {x['p']:.0f}%"
 
 # ---- assignment blocks (arm x order)
 blocks = []
@@ -855,6 +703,13 @@ if HAS_FRAME_CLASS:
 else:
     _uni = D.dropna(subset=["_ckey"]).groupby("_ckey")["_hh"].nunique()
     _uni_size = None
+# final outcome of every household: Completed / Refused / Ineligible are final; Partial / Not reached / Not visited are still pending
+_ST_LAB = {1: "Completed", 2: "Partial", 3: "Refused", 4: "Refused", 5: "Refused", 6: "Refused", 7: "Not reached", 8: "Not reached", 9: "Ineligible", 10: "Not reached"}
+_hh_state = {}
+for _h, _g in D.sort_values("_dt").groupby("_hh"):
+    _last = _g["_status"].iloc[-1]
+    _hh_state[int(_h)] = "Completed" if (_g["_status"] == 1).any() else _ST_LAB.get(int(_last) if pd.notna(_last) else 0, "Other")
+_PENDING = ("Partial", "Not reached", "Not visited", "Other")
 class_rows = []
 for _ck, _target in _uni.items():
     _g = C[C["_ckey"] == _ck]
@@ -868,7 +723,10 @@ for _ck, _target in _uni.items():
         _size = int(_target)
     _needed = int(_size * CLASS_THRESHOLD)                                     # same rule as the form: int(total_parents x 0.30)
     _hits = int(np.nansum(_g["_hit"])) if _nd else 0
-    _rem = max(int(_target) - _nd, 0)                                          # parents not yet interviewed never count as contributing
+    _hhs = list(frame.index[frame["_ckey"] == _ck]) if HAS_FRAME_CLASS else list(D.loc[D["_ckey"] == _ck, "_hh"].dropna().astype(int).unique())
+    _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
+    _rem = sum(1 for x in _states if x in _PENDING)                            # households still to get a final outcome (refusals can no longer contribute)
+    _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
     _pbar = float(np.nanmean(_g["_pclear"])) if _nd >= 5 and _g["_pclear"].notna().any() else _overall_p
     _chance = _binom_tail(_rem, _pbar, _needed - _hits)
     if _nd == 0:
@@ -883,7 +741,7 @@ for _ck, _target in _uni.items():
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
     class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _nd,
-                       "size": _size, "needed": _needed, "hits": _hits, "rem": _rem, "rate": 100.0 * _hits / _size if _size else 0.0,
+                       "size": _size, "needed": _needed, "hits": _hits, "rem": _rem, "refused": _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid_d"])})
 class_rows.sort(key=lambda r: (r["school"], r["grade"], r["sec"]))
@@ -905,12 +763,14 @@ for _sn in cls_schools:
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured",
                           "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started")})
 
+n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
+n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
     K("✅", fmt_n(N_C), "Completed Interviews", f"{META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
     K("🎯", fmt_n(remaining), "Households Remaining", f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted", "navy", "navy"),
-    K("🚪", fmt_n(N_ATT), "Fieldwork Attempts", f"{conv:.0f}% ended in a completed interview", "neutral", "teal"),
+    K("🏁", f"{n_cls_done} / {n_cls}", "Classes Finished", f"Every parent interviewed or has a final outcome · {n_cls_80} more with 5 or fewer left", "up", "teal"),
     K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"30% of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
-    K("⏱️", r1(med_dur) if med_dur is not None else "—", "Median Interview (min)", f"Across {n_field_days} field days", "up", "amber"),
+    K("🚪", fmt_n(N_ATT), "Fieldwork Attempts", f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
 ]
 ov_callouts = [
@@ -929,7 +789,7 @@ if N_C:
     kf.append({"cls": "primary", "html": f"<strong>Willingness to pay:</strong> the average parent would contribute <strong>{fmt_rs(wtp_mean)}</strong> "
                f"(median {fmt_rs(med(wtp_all))}); <strong>{fmt_p(share_pos)}</strong> bid above zero and "
                f"<strong>{fmt_p(sh(wtp_all, lambda s: s >= 2000))}</strong> bid the Rs&nbsp;2,000 maximum. "
-               f"The classroom needs 30% of parents to contribute: that threshold is cleared up to a price of <strong>{fmt_rs(thr_price(wtp_all))}</strong>."})
+               f"Whether a class gets a purifier depends on the share of <em>its own</em> parents contributing (see Classrooms)."})
     aq = avg(num(C, "outdoor_air_quality"))
     aqi_ok = f_multi("beleifs_air_pollute", "belief_air")(C)
     aqi_share = next((i["p"] for i in aqi_ok["items"] if i["l"].lower().startswith("levels")), None) if aqi_ok else None
@@ -938,9 +798,8 @@ if N_C:
 arms_ok = all(int((C["_arm"] == v).sum()) >= 8 for v in (0, 1, 2)) if N_C else False
 if arms_ok:
     m0, m1, m2 = (avg(C.loc[C["_arm"] == v, "_bid"]) for v in (0, 1, 2))
-    w1, w2 = welch(C.loc[C["_arm"] == 0, "_bid"], C.loc[C["_arm"] == 1, "_bid"]), welch(C.loc[C["_arm"] == 0, "_bid"], C.loc[C["_arm"] == 2, "_bid"])
     kf.append({"cls": "purple", "html": f"<strong>First read on the videos:</strong> mean bid is <strong>{fmt_rs(m0)}</strong> in Control, <strong>{fmt_rs(m1)}</strong> after Video 1 "
-               f"and <strong>{fmt_rs(m2)}</strong> after Video 2 (p = {w1['p']:.2f} and {w2['p']:.2f} against Control). Treat as indicative until the sample is complete."})
+               f"and <strong>{fmt_rs(m2)}</strong> after Video 2. Treat as indicative until fieldwork is complete."})
 kf.append({"cls": "teal", "html": f"<strong>Pace:</strong> {per_day:.1f} completed interviews per field day; "
            f"<strong>{fmt_n(remaining)}</strong> households remain" + (f", so the target is reached around <strong>{fdate(proj_finish)}</strong> at this rate." if days_left else ".")})
 
@@ -952,12 +811,10 @@ overview = {
         {"t": "kpis", "d": ov_kpis},
         {"t": "callouts", "d": ov_callouts},
         {"t": "insights", "d": kf, "row": False},
-        {"t": "grid", "cols": 1, "cards": [
-            card("lines", "ovDaily", "Daily Completed Interviews", "Completed interviews per field day with a 3-day rolling average",
-                 {"x": [x["d"] for x in daily], "series": [
-                     {"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True},
-                     {"name": "3-day average", "slot": 1, "y": _roll, "dash": True}]},
-                 opt={"yfmt": "n"}, full=True)]},
+        {"t": "grid", "cols": 2, "cards": [
+            card("lines", "ovDaily", "Daily Completed Interviews", "Completed interviews per field day",
+                 {"x": [x["d"] for x in daily], "series": [{"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True}]},
+                 opt={"yfmt": "n"}, tall=True)]},
         {"t": "grid", "cols": 3, "cards": [
             card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
             card("donut", "ovArm", "Completed by Study Arm", "Control · Video 1 · Video 2",
@@ -975,17 +832,17 @@ PANELS.append(overview)
 _cls_sorted = sorted(class_rows, key=lambda r: (-(r["hits"] / r["needed"] if r["needed"] else 0), r["label"]))
 _pill = lambda k: {"v": {"Secured": 4, "On track": 3, "At risk": 2, "Cannot reach": 1, "Not started": 0}[k], "t": k, "tone": CLS_TONE[k]}
 cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "size", "l": "Class size", "num": True},
-                      {"k": "done", "l": "Interviewed", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
+                      {"k": "done", "l": "Interviewed", "num": True}, {"k": "pend", "l": "Still to do", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
                       {"k": "need", "l": "Needed (30%)", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
                       {"k": "chance", "l": "Chance of reaching 30%", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
              "rows": [{"school": r["school"], "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
-                       "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "hits": r["hits"], "need": r["needed"],
+                       "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "pend": r["rem"], "hits": r["hits"], "need": r["needed"],
                        "rate": {"v": round(r["rate"], 1), "t": f"{r['rate']:.0f}%"}, "chance": {"v": round(100 * r["chance"], 1), "t": f"{100 * r['chance']:.0f}%"},
                        "st": _pill(r["status"])} for r in class_rows],
              "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above 30%. A class can still change until every parent is interviewed."}
 _prog = lambda r: 100.0 * r["hits"] / r["needed"] if r["needed"] else 0.0            # contributors so far as a share of the number needed
 cls_bars = {"items": [{"l": r["label"], "v": round(_prog(r), 1), "p": round(_prog(r), 1), "n": r["hits"], "lab": f"{r['hits']} of {r['needed']}", "slot": CLS_COLOR[r["status"]],
-                       "tip": f"{r['hits']} contributing, {r['needed']} needed (30% of {r['size']}) · {r['done']} of {r['target']} interviewed · {r['status']}"} for r in _cls_sorted],
+                       "tip": f"{r['hits']} contributing, {r['needed']} needed (30% of {r['size']}) · {r['done']} of {r['target']} interviewed, {r['rem']} still to do · {r['status']}"} for r in _cls_sorted],
             "base": None}
 if _cls_sorted:
     _near = [r for r in _cls_sorted if r["status"] in ("On track", "At risk")]
@@ -1017,7 +874,7 @@ if len(cls_arm["items"]) == 3:
 
 PANELS.append({
     "id": "classes", "tab": "🏫 Classrooms", "eyebrow": "Section 02 · The 30% rule, class by class", "title": "Which Classrooms Get a Purifier?",
-    "blurb": "A purifier goes into a classroom only if at least 30% of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not yet interviewed count as not contributing, so a class can still move until every parent is reached.",
+    "blurb": "A purifier goes into a classroom only if at least 30% of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not reached count as not contributing, so a class can still move until every parent has a final outcome.",
     "seg": False, "blocks": [
         {"t": "insight_static", "cls": "navy", "html": "<strong>🏫 How a class gets its purifier:</strong> each parent names the most they would pay. A random price is drawn: if it is at or below the bid, that parent contributes the random price. "
                    "If <strong>at least 30% of all parents in the class</strong> (for a class of 30, that is 9 parents) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
@@ -1244,13 +1101,16 @@ def child_ins(df):
             {"cls": "teal", "html": f"<strong>Attribution:</strong> <strong>{fmt_p(sh(num(df, 'sickness_air'), lambda s: s == 1))}</strong> of parents link their child's symptoms to air pollution, while <strong>{fmt_p(sh(num(df, 'sickness_air'), lambda s: s == 99))}</strong> say they do not know."}]
 
 
+_gvals = sorted(int(x) for x in C["_gradeN"].dropna().unique()) or [1]
+_GR_EDGES = _gvals + [_gvals[-1] + 1]
+_GR_LABELS = [f"Class {g}" for g in _gvals]
 PANELS.append({
     "id": "child", "tab": "🎒 Child & School", "eyebrow": "Section 04 · School, commute & child health", "title": "Child, School & Health",
     "blurb": "The child at the centre of the survey: grade and recent exam results, how they get to school, how much schooling illness has cost them, and whether parents connect that illness to air pollution.",
     "seg": True, "blocks": [
         {"t": "kpis", "d": SD(child_kpis)},
         {"t": "grid", "cols": 3, "cards": [
-            card("bar", "chGrade", "Child's grade", "Class of the child in the study classroom", SD(f_hist(lambda d: d["_grade"], [0, 4, 5, 6, 7, 100], ["Up to 3", "Class 4", "Class 5", "Class 6", "Class 7+"])), var="grade_child", opt={"color": 1}),
+            card("bar", "chGrade", "Child's grade", "Class of the child in the study classroom", SD(f_hist(lambda d: d["_grade"], _GR_EDGES, _GR_LABELS)), var="grade_child", opt={"color": 1}),
             card("bar", "chExam", "Most recent exam result", "Percent, mid-term or final, as reported by the parent", SD(f_hist(lambda d: d["_exam"], [0, 50, 60, 70, 80, 90, 101], ["<50", "50–59", "60–69", "70–79", "80–89", "90+"])), var="grade_exam", opt={"color": 6}),
             card("bar", "chTime", "Commute time to school", "Minutes, one way", SD(f_hist(lambda d: num(d, "time_reach"), [0, 10, 20, 30, 45, 1000], ["<10", "10–19", "20–29", "30–44", "45+"])), var="time_reach", opt={"color": 4})]},
         {"t": "grid", "cols": 2, "cards": [
@@ -1323,11 +1183,10 @@ BIN_E[0] = -1
 
 def wtp_kpis(df):
     b = df["_bid"]
-    tp = thr_price(b)
     return [
         K("💰", fmt_rs(avg(b)), "Mean Willingness to Pay", f"Median {fmt_rs(med(b))}", "up", "green"),
         K("🙋", fmt_p(sh(b, lambda s: s > 0)), "Bid Above Zero", f"{fmt_p(sh(b, lambda s: s >= 2000))} bid the Rs 2,000 maximum", "neutral", "teal"),
-        K("🎯", fmt_rs(tp), "Highest Price 3 in 10 Would Pay", "Each class needs 30% of its own parents to contribute", "up", "purple"),
+        K("🎯", fmt_p(sh(b, lambda s: s >= 500)), "Bid Rs 500 or More", f"{fmt_p(sh(b, lambda s: s >= 1000))} bid Rs 1,000 or more", "up", "purple"),
         K("🔄", fmt_p(sh(num(df, "change_pay"), lambda s: s == 1)), "Revised Their Bid", f"Mean bid {fmt_rs(avg(df['_bid0']))} → {fmt_rs(avg(b))}", "neutral", "amber"),
         K("🎲", fmt_p(pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None), "Would Have Paid", "Bid was at or above the random price drawn", "navy", "navy"),
         K("💸", fmt_rs(avg(df["_paid"])), "Mean Amount Paid", "Realised by the random-price rule", "navy", ""),
@@ -1361,7 +1220,7 @@ def wtp_ins(df):
     if len(ratio):
         exp_ = 100 * float(ratio.mean())
     real = pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None
-    out = [{"cls": "primary", "html": f"<strong>The threshold:</strong> a classroom gets a purifier only if 30% of its parents contribute. Across all parents in this view, bids clear that bar up to <strong>{fmt_rs(thr_price(b))}</strong>. The class-by-class result is in the Classrooms tab."}]
+    out = [{"cls": "primary", "html": f"<strong>How much:</strong> the average bid is <strong>{fmt_rs(avg(b))}</strong> (median {fmt_rs(med(b))}); <strong>{fmt_p(sh(b, lambda s: s >= 500))}</strong> of parents would pay Rs 500 or more. Whether a class gets its purifier depends on its own parents: see the Classrooms tab."}]
     if exp_ is not None and real is not None:
         out.append({"cls": "navy", "html": f"<strong>Beliefs about other parents:</strong> parents expect <strong>{exp_:.0f}%</strong> of other parents to contribute; on the random-price rule <strong>{real:.0f}%</strong> of respondents' own bids would contribute. {'Parents underestimate their peers.' if exp_ < real else 'Parents overestimate their peers.'}"})
     return out
@@ -1385,21 +1244,23 @@ def wtp_groups():
     add("Respiratory illness at home", "Yes", num(C, "hh_resp_ill") == 1, 2); add("Respiratory illness at home", "No", num(C, "hh_resp_ill") == 2, 2)
     add("Perceived child risk", "High (≥50% higher)", num(C, "risk_air_child").isin([4, 5]), 8); add("Perceived child risk", "Low or none", num(C, "risk_air_child").isin([1, 2, 3]), 8)
     for v in (0, 1, 2):
-        add("Study arm", ARM_LAB[v], C["_arm"] == v, [7, 3, 5][v])
+        add("Study group", ARM_LAB[v], C["_arm"] == v, [7, 3, 5][v])
     out = []
-    for g, l, s, slot in rows:
-        m = mean_ci(s)
-        if m and m["n"] >= MIN_CELL:
-            out.append({"g": g, "l": l, "m": r1(m["m"], 0), "lo": r1(m["lo"], 0) if m["lo"] is not None else None,
-                        "hi": r1(m["hi"], 0) if m["hi"] is not None else None, "n": m["n"], "slot": slot})
+    for g, l, ser, slot in rows:
+        ser = ser.dropna()
+        if len(ser) >= MIN_CELL:
+            out.append({"g": g, "l": l, "m": r1(float(ser.mean()), 0), "n": int(len(ser)), "slot": slot})
     return {"rows": out, "unit": "Rs", "overall": r1(avg(C["_bid"]), 0)} if out else None
 
 
-def d_demand(df):
-    y = demand(df["_bid"])
-    return {"x": [f"Rs {p:,}" for p in PRICES], "base": int(df["_bid"].notna().sum()),
-            "series": [{"name": "Share willing to contribute at least this much", "slot": 2, "y": y, "fill": True, "pts": True},
-                       {"name": "30% needed for the purifier", "slot": 1, "y": [30] * len(PRICES), "dash": True}]} if y else None
+PRICE_STEPS = [100, 250, 500, 1000, 1500, 2000]
+
+
+def price_bars(df):
+    b = df["_bid"].dropna()
+    if not len(b):
+        return None
+    return {"items": [{"l": f"Rs {p:,} or more", "n": int((b >= p).sum()), "p": pct(int((b >= p).sum()), len(b))} for p in PRICE_STEPS], "base": int(len(b))}
 
 
 PANELS.append({
@@ -1410,8 +1271,8 @@ PANELS.append({
         {"t": "grid", "cols": 1, "cards": [
             card("bar", "wtDist", "Distribution of final bids", "Amount each parent was willing to contribute after any revision, in rupees", SD(f_hist(lambda d: d["_bid"], BIN_E, BIN_L)), var="contribute_will / change_pay_w", opt={"color": 6, "fmt": "pct"}, full=True)]},
         {"t": "grid", "cols": 2, "cards": [
-            card("lines", "wtDemand", "Demand curve", "Share of parents willing to contribute at least each price; the dashed line is the 30% needed for a purifier", SD(d_demand), opt={"yfmt": "pct", "max": 100, "xtitle": "Contribution price", "ytitle": "% willing to contribute"}, tall=True),
-            card("hbar", "wtGroup", "Mean bid by respondent group", "Mean final bid with 95% confidence interval; not affected by the segment selector", wtp_groups(), opt={"grouped": True}, tall=True, auto=True)]},
+            card("bar", "wtDemand", "How many parents would pay at least this much?", "Share of parents whose bid is at or above each amount", SD(price_bars), opt={"color": 6, "fmt": "pct"}),
+            card("hbar", "wtGroup", "Average amount parents would pay, by group", "Average final bid for each group; not affected by the filter above", wtp_groups(), opt={"grouped": True}, tall=True, auto=True)]},
         {"t": "grid", "cols": 3, "cards": [
             card("hbar", "wtOthers", "What parents expect other parents to do", "Average expected split of the other parents in the class, % of class", SD(others_belief), opt={"color": 5, "fmt": "num1", "sfx": "%"}),
             card("donut", "wtChange", "Revised their bid after seeing the result", "Would you like to change how much you are willing to contribute?", SD(f_dist("change_pay", "yesno")), var="change_pay", opt={"colors": [4, "muted"]}),
@@ -1423,129 +1284,99 @@ PANELS.append({
             card("donut", "wtSel", "If selected and the price is above the bid", "Comprehension: is the Rs 1,000 bonus still received?", SD(f_dist("selected_parent", "yesno")), var="selected_parent", opt={"colors": [6, 2]}),
             card("donut", "wtNot", "If not selected: which bid is used", "Comprehension of the second-stage rule", SD(f_dist("not_selected_parent", "bid_use")), var="not_selected_parent", opt={"colors": [6, 2, 4]})]},
         {"t": "insights", "d": SD(wtp_ins), "row": True},
-        {"t": "note", "html": "Final bid = the revised bid where a parent changed it, otherwise the original. “Would have contributed” compares the bid with the random price drawn in the interview. The 30% threshold price is the highest price at which at least 30% of the segment would still contribute."},
+        {"t": "note", "html": "Final bid = the revised bid where a parent changed it, otherwise the original. “Would have paid” compares the final bid with the final random price drawn in the interview."},
     ]})
 
-# ====================================================================== PANEL 7 - TREATMENT EFFECTS
+# ====================================================================== PANEL - VIDEO EFFECTS
 arm_masks = {v: C["_arm"] == v for v in (0, 1, 2)}
 ARM_SLOT = {0: 7, 1: 3, 2: 5}
 n_arm = {v: int(arm_masks[v].sum()) for v in (0, 1, 2)}
+m_arm = {v: avg(C.loc[arm_masks[v], "_bid"]) for v in (0, 1, 2)}
 te_kpis = []
 for v in (0, 1, 2):
-    m = avg(C.loc[arm_masks[v], "_bid"])
-    dlt = None if v == 0 or avg(C.loc[arm_masks[0], "_bid"]) is None or m is None else m - avg(C.loc[arm_masks[0], "_bid"])
-    te_kpis.append(K(["⚪", "🎬", "🎞️"][v], fmt_rs(m), f"{ARM_LAB[v]}: Mean Bid", f"n = {n_arm[v]}" + ("" if dlt is None else f" · {dlt:+,.0f} vs Control"), "up" if (dlt or 0) > 0 else "neutral", ["navy", "teal", "purple"][v]))
+    m = m_arm[v]
+    dlt = None if v == 0 or m_arm[0] is None or m is None else m - m_arm[0]
+    te_kpis.append(K(["⚪", "🎬", "🎞️"][v], fmt_rs(m), f"{ARM_LAB[v]}: Average Bid", f"n = {n_arm[v]}" + ("" if dlt is None else f" · {dlt:+,.0f} vs Control"), "up" if (dlt or 0) > 0 else "neutral", ["navy", "teal", "purple"][v]))
 ords = {v: C["_ord"] == v for v in (1, 2)}
-_o = welch(C.loc[ords[1], "_bid"], C.loc[ords[2], "_bid"])
-te_kpis.append(K("🔀", fmt_rs(avg(C.loc[ords[2], "_bid"])), "Beliefs After Bid: Mean Bid", "" if _o is None else f"{_o['diff']:+,.0f} vs beliefs-before (p = {_o['p']:.2f})", "neutral", "amber"))
+_ob = {o: avg(C.loc[ords[o], "_bid"]) for o in (1, 2)}
+te_kpis.append(K("🔀", fmt_rs(_ob[2]), "Asked About Others After Own Bid", "" if (_ob[1] is None or _ob[2] is None) else f"{_ob[2] - _ob[1]:+,.0f} vs asked before", "neutral", "amber"))
 
 OUTCOMES = [
-    ("Mean bid (Rs)", "rs", lambda d: d["_bid"]),
-    ("Mean bonus-round bid (Rs)", "rs", lambda d: d["_bonus"]),
-    ("Would have contributed (random price cleared the bid)", "pp", lambda d: d["_hit"]),
+    ("Average bid (Rs)", "rs", lambda d: d["_bid"]),
+    ("Average bonus-round bid (Rs)", "rs", lambda d: d["_bonus"]),
+    ("Would have paid (random price cleared the bid)", "pp", lambda d: d["_hit"]),
     ("Bid above zero", "pp", lambda d: (d["_bid"] > 0).astype(float).where(d["_bid"].notna())),
     ("Bid at the Rs 2,000 maximum", "pp", lambda d: (d["_bid"] >= 2000).astype(float).where(d["_bid"].notna())),
-    ("Sees ≥50% higher child risk", "pp", lambda d: num(d, "risk_air_child").where(num(d, "risk_air_child").isin([1, 2, 3, 4, 5])).map(lambda v: np.nan if pd.isna(v) else float(v >= 4))),
-    ("Expects ≥10% exam gain from purifier", "pp", lambda d: num(d, "score_exams_ap").map(lambda v: np.nan if pd.isna(v) else float(v >= 4))),
-    ("Supports publicly funded purifiers", "pp", lambda d: num(d, "support_policy").map(lambda v: np.nan if pd.isna(v) else float(v in (1, 2)))),
-    ("Supports a small mandatory school fee", "pp", lambda d: num(d, "small_fee").map(lambda v: np.nan if pd.isna(v) else float(v == 1))),
-    ("Air pollution should be a top school priority", "pp", lambda d: num(d, "top_prio").map(lambda v: np.nan if pd.isna(v) else float(v == 1))),
+    ("See ≥50% higher child risk", "pp", lambda d: num(d, "risk_air_child").where(num(d, "risk_air_child").isin([1, 2, 3, 4, 5])).map(lambda v: np.nan if pd.isna(v) else float(v >= 4))),
+    ("Expect ≥10% exam gain from a purifier", "pp", lambda d: num(d, "score_exams_ap").map(lambda v: np.nan if pd.isna(v) else float(v >= 4))),
+    ("Support publicly funded purifiers", "pp", lambda d: num(d, "support_policy").map(lambda v: np.nan if pd.isna(v) else float(v in (1, 2)))),
+    ("Support a small mandatory school fee", "pp", lambda d: num(d, "small_fee").map(lambda v: np.nan if pd.isna(v) else float(v == 1))),
+    ("Say air pollution should be a top school priority", "pp", lambda d: num(d, "top_prio").map(lambda v: np.nan if pd.isna(v) else float(v == 1))),
 ]
-CMPS = [("Video 1 vs Control", lambda d: d["_arm"] == 0, lambda d: d["_arm"] == 1),
-        ("Video 2 vs Control", lambda d: d["_arm"] == 0, lambda d: d["_arm"] == 2),
-        ("Video 2 vs Video 1", lambda d: d["_arm"] == 1, lambda d: d["_arm"] == 2),
-        ("Any video vs Control", lambda d: d["_arm"] == 0, lambda d: d["_arm"].isin([1, 2]))]
-eff_rows = []
-for cname, fa, fb in CMPS:
-    for oname, unit, getter in OUTCOMES:
-        s = getter(C)
-        w = welch(s[fa(C)], s[fb(C)])
-        if not w:
-            continue
-        k_ = 1 if unit == "rs" else 100
-        fmt_v = (lambda x: f"{x:,.0f}") if unit == "rs" else (lambda x: f"{x:.0f}%")
-        fmt_d = (lambda x: f"{x:+,.0f}") if unit == "rs" else (lambda x: f"{x:+.1f} pp")
-        eff_rows.append({"cmp": cname, "o": oname, "a": {"v": r1(s[fa(C)].mean() * k_), "t": fmt_v(s[fa(C)].mean() * k_)},
-                         "b": {"v": r1(s[fb(C)].mean() * k_), "t": fmt_v(s[fb(C)].mean() * k_)},
-                         "diff": {"v": r1(w["diff"] * k_), "t": fmt_d(w["diff"] * k_)},
-                         "ci": {"v": r1(w["lo"] * k_), "t": f"{fmt_d(w['lo'] * k_)} to {fmt_d(w['hi'] * k_)}"},
-                         "p": {"v": round(w["p"], 3), "t": f"{w['p']:.2f}" if w["p"] >= 0.01 else "<0.01", "sig": bool(w["p"] < 0.05)},
-                         "n": f"{w['na']} / {w['nb']}",
-                         "v": {"v": round(w["p"], 3), "t": "Clear difference" if w["p"] < 0.05 else ("Possible difference" if w["p"] < 0.10 else "No clear difference"),
-                               "tone": "good" if w["p"] < 0.05 else ("amber" if w["p"] < 0.10 else "grey")}})
+eff_rows, wins = [], {0: 0, 1: 0, 2: 0}
+for oname, unit, getter in OUTCOMES:
+    ser = getter(C); k_ = 1 if unit == "rs" else 100
+    vals = [float(ser[arm_masks[v]].mean()) * k_ if ser[arm_masks[v]].notna().any() else None for v in (0, 1, 2)]
+    ok = [x for x in vals if x is not None]
+    best = vals.index(max(ok)) if len(ok) >= 2 and max(ok) > min(ok) else None
+    if best is not None:
+        wins[best] += 1
+    fmt_o = lambda x: "—" if x is None else (f"Rs {x:,.0f}" if unit == "rs" else f"{x:.0f}%")
+    eff_rows.append({"o": oname, **{key: {"v": vals[i], "t": fmt_o(vals[i]), "best": best == i} for i, key in enumerate(("c", "v1", "v2"))}})
+eff_data = ({"cols": [{"k": "o", "l": "Question"}, {"k": "c", "l": "Control", "num": True, "hl": True}, {"k": "v1", "l": "Video 1", "num": True, "hl": True}, {"k": "v2", "l": "Video 2", "num": True, "hl": True}],
+             "rows": eff_rows, "read": f"The highest group is Video 1 on <strong>{wins[1]}</strong> of {len(eff_rows)} questions, Video 2 on <strong>{wins[2]}</strong> and Control on <strong>{wins[0]}</strong>."}
+            if eff_rows and N_C >= 3 else None)
 
-# balance table
-BAL = [("Age (mean, years)", "num", lambda d: d["_age"]),
+BAL = [("Age (average, years)", "num", lambda d: d["_age"]),
        ("Monthly income (median, Rs)", "med", lambda d: d["_income"]),
-       ("Household size (mean)", "num", lambda d: d["_hhsize"]),
+       ("Household size (average)", "num", lambda d: d["_hhsize"]),
        ("Female respondent", "sh", lambda d: (num(d, "gender") == 2).astype(float).where(num(d, "gender").notna())),
        ("Urban area", "sh", lambda d: (num(d, "area_class") == 2).astype(float).where(num(d, "area_class").notna())),
        ("Owns an air conditioner", "sh", lambda d: (num(d, "asset_ac") == 1).astype(float).where(num(d, "asset_ac").notna())),
        ("Respiratory illness at home", "sh", lambda d: (num(d, "hh_resp_ill") == 1).astype(float).where(num(d, "hh_resp_ill").notna())),
-       ("Outdoor pollution rating (mean, 0–10)", "num", lambda d: num(d, "outdoor_air_quality")),
-       ("Child's grade (mean)", "num", lambda d: d["_grade"])]
+       ("Outdoor pollution rating (average, 0–10)", "num", lambda d: num(d, "outdoor_air_quality")),
+       ("Child's class (average)", "num", lambda d: d["_grade"])]
 bal_rows = []
 for name, kind, getter in BAL:
-    s = getter(C)
-    groups = [s[arm_masks[v]] for v in (0, 1, 2)]
+    ser = getter(C)
+    groups = [ser[arm_masks[v]] for v in (0, 1, 2)]
     if kind == "sh":
-        vals = [sh(g, lambda x: x == 1) for g in groups]; p_ = chi2_p(groups); t = lambda x: "—" if x is None else f"{x:.0f}%"
+        vals = [sh(g, lambda x: x == 1) for g in groups]; t = lambda x: "—" if x is None else f"{x:.0f}%"
     elif kind == "med":
-        vals = [med(g) for g in groups]; p_ = anova_p([np.log(g.where(g > 0)) for g in groups]); t = lambda x: "—" if x is None else f"{x:,.0f}"
+        vals = [med(g) for g in groups]; t = lambda x: "—" if x is None else f"{x:,.0f}"
     else:
-        vals = [avg(g) for g in groups]; p_ = anova_p(groups); t = lambda x: "—" if x is None else f"{x:.1f}"
-    bal_rows.append({"o": name, "c": {"v": vals[0], "t": t(vals[0])}, "v1": {"v": vals[1], "t": t(vals[1])}, "v2": {"v": vals[2], "t": t(vals[2])},
-                     "p": {"v": None if p_ is None else round(p_, 3), "t": "—" if p_ is None else f"{p_:.2f}", "flag": bool(p_ is not None and p_ < 0.10)},
-                     "v": {"v": 1 if (p_ is not None and p_ < 0.10) else 0, "t": "Check" if (p_ is not None and p_ < 0.10) else "Similar", "tone": "amber" if (p_ is not None and p_ < 0.10) else "good"}})
-n_imb = sum(1 for r in bal_rows if r["p"]["flag"])
+        vals = [avg(g) for g in groups]; t = lambda x: "—" if x is None else f"{x:.1f}"
+    bal_rows.append({"o": name, "c": t(vals[0]), "v1": t(vals[1]), "v2": t(vals[2])})
+bal_data = {"cols": [{"k": "o", "l": "About the parents"}, {"k": "c", "l": "Control", "num": True}, {"k": "v1", "l": "Video 1", "num": True}, {"k": "v2", "l": "Video 2", "num": True}], "rows": bal_rows} if N_C >= 3 else None
 
-ci_arm = {"rows": [], "unit": "Rs"}
-for v in (0, 1, 2):
-    m = mean_ci(C.loc[arm_masks[v], "_bid"])
-    if m:
-        ci_arm["rows"].append({"g": "Study arm", "l": ARM_LAB[v], "m": r1(m["m"], 0), "lo": r1(m["lo"], 0) if m["lo"] is not None else None, "hi": r1(m["hi"], 0) if m["hi"] is not None else None, "n": m["n"], "slot": ARM_SLOT[v]})
-ci_ord = {"rows": [], "unit": "Rs"}
+bar_arm = {"rows": [{"g": "Study group", "l": ARM_LAB[v], "m": r1(m_arm[v], 0), "n": n_arm[v], "slot": ARM_SLOT[v]} for v in (0, 1, 2) if m_arm[v] is not None], "unit": "Rs"}
+bar_ord = {"rows": [], "unit": "Rs"}
 for arm in (0, 1, 2):
     for o in (1, 2):
-        m = mean_ci(C.loc[arm_masks[arm] & ords[o], "_bid"])
-        if m and m["n"] >= 3:
-            ci_ord["rows"].append({"g": ARM_LAB[arm], "l": "Asked before own bid" if o == 1 else "Asked after own bid", "m": r1(m["m"], 0), "lo": r1(m["lo"], 0) if m["lo"] is not None else None, "hi": r1(m["hi"], 0) if m["hi"] is not None else None, "n": m["n"], "slot": ARM_SLOT[arm]})
-dem_arm = {"x": [f"Rs {p:,}" for p in PRICES], "base": N_C, "series": []}
-for v in (0, 1, 2):
-    y = demand(C.loc[arm_masks[v], "_bid"])
-    if y:
-        dem_arm["series"].append({"name": f"{ARM_LAB[v]} (n = {n_arm[v]})", "slot": ARM_SLOT[v], "y": y, "pts": True})
-dem_arm["series"].append({"name": "30% needed for the purifier", "slot": 1, "y": [30] * len(PRICES), "dash": True, "thin": True})
-thr_arm = {v: thr_price(C.loc[arm_masks[v], "_bid"]) for v in (0, 1, 2)}
-if len(dem_arm["series"]) < 2:
-    dem_arm = None
-ci_arm = ci_arm if ci_arm["rows"] else None
-ci_ord = ci_ord if ci_ord["rows"] else None
-bal_data = {"cols": [{"k": "o", "l": "Characteristic"}, {"k": "c", "l": "Control", "num": True}, {"k": "v1", "l": "Video 1", "num": True}, {"k": "v2", "l": "Video 2", "num": True}, {"k": "p", "l": "Chance it is luck (p-value)", "num": True, "pflag": True}, {"k": "v", "l": "Groups look", "verdict": True}], "rows": bal_rows, "read": (f"<strong>{n_imb}</strong> of {len(bal_rows)} characteristics differ between groups at the 10% level." if n_imb else f"The three groups look alike on all {len(bal_rows)} characteristics.")} if N_C >= 3 else None
-eff_data = {"cols": [{"k": "o", "l": "Outcome"}, {"k": "a", "l": "Comparison group", "num": True}, {"k": "b", "l": "Treatment group", "num": True}, {"k": "diff", "l": "Difference", "num": True}, {"k": "ci", "l": "Likely range (95% CI)", "num": True}, {"k": "p", "l": "Chance it is luck (p-value)", "num": True, "psig": True}, {"k": "v", "l": "Result", "verdict": True}, {"k": "n", "l": "n (comparison / treatment)", "num": True}], "rows": eff_rows, "read": f"<strong>{sum(1 for r in eff_rows if r['p']['sig'])}</strong> of {len(eff_rows)} comparisons show a clear difference (p below 0.05). Everything else could be chance at this sample size."} if eff_rows else None
+        ser = C.loc[arm_masks[arm] & ords[o], "_bid"].dropna()
+        if len(ser) >= 3:
+            bar_ord["rows"].append({"g": ARM_LAB[arm], "l": "Asked before own bid" if o == 1 else "Asked after own bid", "m": r1(float(ser.mean()), 0), "n": int(len(ser)), "slot": ARM_SLOT[arm]})
+bar_arm = bar_arm if bar_arm["rows"] else None
+bar_ord = bar_ord if bar_ord["rows"] else None
 
-te_ins = [
-    {"cls": "navy", "html": f"<strong>Randomisation:</strong> " + (f"<strong>{n_imb}</strong> of {len(bal_rows)} background characteristics differ across arms at the 10% level: expected by chance in roughly one in ten, but worth a look if it grows." if n_imb else f"none of the {len(bal_rows)} background characteristics differ across arms at the 10% level, so the three groups look comparable.")},
-    {"cls": "teal", "html": "<strong>Price clearing 30%:</strong> " + " · ".join(f"{ARM_LAB[v]} <strong>{fmt_rs(thr_arm[v])}</strong>" for v in (0, 1, 2)) + ". A higher price means more classrooms reach the threshold at that contribution level."},
-]
+_best_arm = max((v for v in (0, 1, 2) if m_arm[v] is not None), key=lambda v: m_arm[v], default=None)
+te_ins = ([{"cls": "teal", "html": f"<strong>Highest average bid:</strong> <strong>{ARM_LAB[_best_arm]}</strong> at <strong>{fmt_rs(m_arm[_best_arm])}</strong> "
+            + " · ".join(f"{ARM_LAB[v]} {fmt_rs(m_arm[v])}" for v in (0, 1, 2) if m_arm[v] is not None and v != _best_arm) + ". Treat as indicative until fieldwork is complete."}] if _best_arm is not None else [])
 PANELS.append({
-    "id": "effects", "tab": "🧪 Treatment Effects", "eyebrow": "Section 07 · Randomised information experiment", "title": "Treatment Effects & Randomisation",
-    "blurb": "Households were randomly assigned to no video (Control), Video 1 or Video 2 before the willingness-to-pay exercise, and to hearing about other parents' behaviour before or after their own bid. Differences between arms are the field read of what the videos change.",
+    "id": "effects", "tab": "🧪 Video Effects", "eyebrow": "Section 07 · Randomised information experiment", "title": "Did the Videos Make a Difference?",
+    "blurb": "Households were randomly assigned to no video (Control), Video 1 or Video 2 before the willingness-to-pay exercise, and to hearing about other parents' behaviour before or after their own bid. Compare the groups below.",
     "seg": False, "blocks": [
-        {"t": "insight_static", "cls": "navy", "html": "<strong>🧪 Design:</strong> <strong>Control</strong> sees no video. <strong>Video 1</strong> and <strong>Video 2</strong> are two short films about classroom air purifiers shown before the bid. Assignment is pre-drawn in the sampling frame with a fixed seed, so arm is unrelated to who the enumerator visits."},
+        {"t": "insight_static", "cls": "navy", "html": "<strong>🧪 Design:</strong> <strong>Control</strong> sees no video. <strong>Video 1</strong> and <strong>Video 2</strong> are two short films about classroom air purifiers shown before the bid. Assignment is pre-drawn in the sampling frame with a fixed seed, so group is unrelated to who the enumerator visits."},
         {"t": "kpis", "d": te_kpis},
         {"t": "grid", "cols": 2, "cards": [
-            card("lines", "teDemand", "Demand curve by study arm", "Share of parents willing to contribute at least each price, by arm; the dashed line is the 30% needed", dem_arm, opt={"yfmt": "pct", "max": 100, "xtitle": "Contribution price", "ytitle": "% willing to contribute"}, tall=True),
-            card("hbar", "teArmCi", "Mean bid by study arm", "Mean final bid with 95% confidence interval", ci_arm, opt={"grouped": True}, tall=True)]},
+            card("hbar", "teArmCi", "Average amount parents would pay, by study group", "Average final bid in Control, Video 1 and Video 2", bar_arm, opt={"grouped": True}),
+            card("hbar", "teOrder", "Does asking about other parents first change the bid?", "Average bid when parents were asked about other parents before or after their own bid", bar_ord, opt={"grouped": True}, auto=True)]},
         {"t": "grid", "cols": 1, "cards": [
-            card("table", "teEff", "Estimated differences between arms", "Difference in means (Welch t-test). Rupees for bids; percentage points for shares. Shaded p-values are below 0.05. With small samples treat these as indicative.",
-                 eff_data, full=True, opt={"filterKey": "cmp", "filterVals": [c[0] for c in CMPS], "noSort": True})]},
-        {"t": "grid", "cols": 2, "cards": [
-            card("table", "teBal", "Randomisation balance", "Background characteristics by arm; p-value from an F-test (numeric) or chi-squared test (shares). p under 0.10 is flagged to verify.",
-                 bal_data, opt={"noSort": True}),
-            card("hbar", "teOrder", "Order effect: beliefs before or after the bid", "Mean bid with 95% CI when parents were asked about other parents before vs after their own bid", ci_ord, opt={"grouped": True}, tall=True, auto=True)]},
-        {"t": "insights", "d": te_ins, "row": True},
-        {"t": "note", "html": "Estimates use completed interviews only, counted once per household. Confidence intervals and p-values are unadjusted for multiple comparisons; with about 33 households per arm they are wide, and they narrow as fieldwork completes."},
+            card("table", "teEff", "Did the videos change what parents say?", "Average for each group. The highest number in each row is highlighted.", eff_data, full=True, opt={"noSort": True})]},
+        {"t": "grid", "cols": 1, "cards": [
+            card("table", "teBal", "Are the three groups alike?", "Background of the parents in each group. Similar numbers mean a fair comparison.", bal_data, full=True, opt={"noSort": True})]},
+        {"t": "insights", "d": te_ins, "row": False},
+        {"t": "note", "html": "Figures use completed interviews only, counted once per household. Group sizes are roughly a third of the sample each."},
     ]})
 
 # ====================================================================== PANEL 8 - FAIRNESS & COLLECTIVE ACTION
@@ -1675,6 +1506,33 @@ PANELS.append({
         {"t": "tracker", "d": {"rows": tr_rows, "enums": sorted({r["e"] for r in tr_rows if r["e"] != "—"}), "arms": {str(k): v for k, v in ARM_LAB.items()}, "schools": cls_schools, "classes": [r["label"] for r in class_rows]}},
         {"t": "note", "html": "One row per household ID in the frame. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},
     ]})
+
+# ---- tabs removed on request; their two most useful charts move to the overview
+def _take(panel_id, card_id):
+    for _p in PANELS:
+        if _p["id"] == panel_id:
+            for _b in _p["blocks"]:
+                if _b["t"] == "grid":
+                    for _c in _b["cards"]:
+                        if _c["id"] == card_id:
+                            return _c
+    return None
+
+
+_pace, _agree = _take("ops", "opsCum"), _take("fair", "faAgree")
+for _b in overview["blocks"]:
+    if _b["t"] == "grid" and any(c["id"] == "ovDaily" for c in _b["cards"]) and _pace:
+        _pace["full"] = False
+        _b["cards"].append(_pace)
+if _agree:
+    _agree["full"] = True
+    _ix = next(i for i, b in enumerate(overview["blocks"]) if b["t"] == "note")
+    overview["blocks"].insert(_ix, {"t": "grid", "cols": 1, "cards": [_agree]})
+    overview["seg"] = False
+PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
+for _r in qa_rows:
+    if _r["n"]:
+        say(f"  check: {_r['name']}: {_r['n']} record(s)")
 
 # ====================================================================== plain-language layer
 _TEXT = TX.card_text(N_TARGET)
