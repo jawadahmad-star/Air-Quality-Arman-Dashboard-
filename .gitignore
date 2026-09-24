@@ -1,0 +1,22 @@
+# Raw survey data, identified exports, frame files and anything with PII: never push
+*.csv
+*.dta
+*.xlsx
+*.xls
+*.xlsm
+*.zip
+*.rar
+*.mp4
+
+# Local-only: holds the dashboard password and the data-build log
+dashboard.config.json
+build_log.txt
+.dashboard_password
+
+# Local scratch / OS noise
+__pycache__/
+*.pyc
+site/
+Thumbs.db
+Desktop.ini
+.claude/
