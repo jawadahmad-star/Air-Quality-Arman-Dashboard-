@@ -11,12 +11,13 @@ import re
 
 TABS = {  # short labels so all ten tabs fit on a laptop screen
     "overview": "📊 Overview", "ops": "🛠️ Field Ops", "profile": "👨‍👩‍👧 Respondents", "child": "🎒 Child & Health",
-    "aware": "🌫️ Awareness", "wtp": "💰 Willing to Pay", "effects": "🧪 Video Effects", "fair": "⚖️ Fairness",
+    "classes": "🏫 Classrooms", "aware": "🌫️ Awareness", "wtp": "💰 Willing to Pay", "effects": "🧪 Video Effects", "fair": "⚖️ Fairness",
     "time": "⏳ Patience", "tracker": "📋 Tracker",
 }
 SHORT = {  # one line per section for the menu
     "overview": "Progress, study groups and headline findings",
     "ops": "Pace, team performance and data checks",
+    "classes": "Which classes reach the 30% rule and get a purifier",
     "profile": "Who was interviewed",
     "child": "School, commute and child health",
     "aware": "What parents know and believe about air pollution",
@@ -43,7 +44,7 @@ HELP = {
     "demand": {
         "read": "Move along the bottom from cheap to expensive. The line shows what share of parents would still pay <strong>that much or more</strong>. "
                 "It always starts at 100% (everybody will pay Rs 0) and falls as the price rises. The dashed line marks 30%: "
-                "a classroom only gets its purifier if 30% of parents contribute, so the point where the red line crosses the dashed line is the highest price that still works.",
+                "a classroom only gets its purifier if 30% of that class's own parents contribute, so the point where the red line crosses the dashed line is the highest price that still works.",
         "care": "A line that sits higher means parents value the purifier more. Two lines close together mean no real difference.",
     },
     "effects": {
@@ -77,6 +78,16 @@ HELP = {
     "qa": {
         "read": "The dashboard runs automatic checks on every interview. “Verify” means the field team should look at those records again. “Clear” means nothing found.",
         "care": "A flag is a prompt to look, never a finding that someone did anything wrong.",
+    },
+    "classrule": {
+        "read": "A purifier is installed in a class only if at least 30% of that class's parents end up contributing. Each parent's contribution is decided by a random price drawn against their own bid: "
+                "if the random price is at or below the bid, the parent contributes it. For a class of 30 parents, 9 contributors are enough. Parents who have not been interviewed (or cannot be reached) count as not contributing.",
+        "care": "Because prices are drawn at random, two classes with the same average bid can end up on different sides of the line. A class is only final once every parent has been interviewed.",
+    },
+    "chance": {
+        "read": "“Chance of reaching 30%” looks at the parents still to be interviewed. It assumes each of them contributes with the same probability as the class average so far, "
+                "and adds up how likely it is that enough of them will contribute to bring the class to 30%. Above 50% is “On track”; below is “At risk”.",
+        "care": "It is a projection from current bids, not a promise. It sharpens as more parents in the class are interviewed.",
     },
     "cum": {
         "read": "The green line is the number of completed interviews so far. The dashed line continues it at the average pace to date. The red dashed line is the target. "
@@ -121,8 +132,21 @@ def card_text(target):
                    "Har visit ka nateeja: mukammal, inkaar, ghar band wagera. Agar inkaar ziyada ho to team ko parents se baat karne ka tareeqa behtar karna parta hai.", None),
         "ovFunnel": ("From first visit to a usable interview", "How many visits are lost at each step.",
                      "Pehli bar saare visits, phir jo mile aur razi hue, phir mukammal, phir analysis mein gine gaye. Har agli bar choti hoti hai kyunke kuch cases beech mein nikal jate hain.", None),
-        "ovBlocks": ("Are all six parts of the sample filling evenly?", "Progress for each group (Control, Video 1, Video 2) and question order.",
-                     "Sample 6 hissoon mein banta hai (3 groups x 2 sawalon ka order). Har card dikhata hai wo hissa kitna bhar chuka. Jo hissa peeche ho us par ziyada visits karwaein.", None),
+        "ovBlocks": ("How is each school progressing?", "Completed interviews against the parents listed in each school's classes.",
+                     "Har school ka card: kitne parents ki list thi aur kitno ka interview ho chuka. Bar jitni bhari utna kaam mukammal. Jo school peeche ho wahan zyada visits karwaein.", None),
+        # ---- classrooms
+        "clStatus": ("Where do the classes stand?", "Number of classes in each status.",
+                     "Kitni classes 30% tak pahunch chuki hain (Secured), kitni pahunchne wali hain (On track), kitni khatre mein (At risk), aur kitni ab pahunch hi nahi sakti (Cannot reach). Har class ko alag alag dekha jata hai, poore sample ko nahi.", "classrule"),
+        "clDist": ("How many classes are near the target?", "Classes grouped by how much of the contributors they need they already have.",
+                   "Har class ko purifier ke liye kuch contributors chahiyein (class ka 30%). Yeh graph batata hai kitni classes ke paas zaroori contributors ka 0-25%, 25-50%, 50-75%, 75-100% aur poora (100%+) hai. Aakhri (hara) group wali classes ko purifier mil jata hai.", None),
+        "clBars": ("How close is each class to the number it needs?", "Contributors so far as a share of the number needed (30% of the class). The dashed line is 100%: secured.",
+                   "Har class ek bar hai. Bar batati hai ke class ko jitne contributors chahiyein (class ka 30%) un mein se kitne ho chuke. Bar ke aakhir mein likha hai, jaise '9 of 12': 12 chahiyein, 9 ho gaye. Dashed line 100% hai: jo bar us se aagay nikal jaye us class ko purifier mil jata hai. Jinka interview nahi hua unhein contribute nahi gina jata. Rang status batata hai: hara = secured, neela = on track, narangi = at risk, laal = cannot reach.", "classrule"),
+        "clSchool": ("How does each school's classes split?", "Each bar is one school; the colours are its classes' status.",
+                     "Har school ki classes kin kin status mein hain. Number classes ki ginti hai. Is se pata chalta hai kaun se school ki classes zyada tar purifier hasil kar rahi hain.", None),
+        "clArm": ("Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group.",
+                  "Control, Video 1 aur Video 2 mein kitne % parents ka random price unke bid se kam nikla (yani woh contribute karenge). Video ka asar dekhne ka seedha tareeqa.", None),
+        "clTable": ("Every class, one line each", "Click a column to sort, or filter by school. “Chance” is the probability of reaching 30% once the parents still to interview are counted.",
+                    "Har class ki poori tafseel: class size, kitne parents ka interview hua, kitne contribute kar rahe hain, kitne chahiyein (30%), aur baaqi parents ke baad 30% tak pahunchne ka imkaan (Chance). Status aakhri column mein hai.", "chance"),
         # ---- field ops
         "opsCum": ("Are we on pace to finish?", "Interviews done so far, where today's pace takes us (dashed), and the target (red).",
                    "Hari line ab tak ke mukammal interviews hain. Dashed line maujooda raftaar par agla andaza hai aur laal line target. Jahan dashed line laal line ko chhoti hai wahi mutawaqqa khatam hone ki tareekh hai.", "cum"),
@@ -153,7 +177,7 @@ def card_text(target):
         "prIll": ("Anyone with a breathing illness at home?", "Respiratory illness in the household.", "Ghar mein kisi ko saans ki bimari hai ya nahi.", None),
         "prIll2": ("Is it a child or an adult?", "Who is affected, where illness is reported.", "Agar bimari hai to bachay ko hai ya bade ko.", None),
         # ---- child
-        "chGrade": ("Which class is the child in?", "Class of the child in the study classroom.", "Bachay ki class (6 se 10 tak zyada tar).", None),
+        "chGrade": ("Which class is the child in?", "Class 4, 5 or 6 of the child in the study classroom.", "Bachay ki class (4, 5 ya 6).", None),
         "chExam": ("How did the child do in the last exam?", "Most recent exam result reported by the parent, in percent.", "Pichlay imtihan mein bachay ke numbers (percent). Sirf wahi jawab gine gaye jin mein percentage thi.", None),
         "chTime": ("How long is the journey to school?", "One-way travel time in minutes.", "Ghar se school tak ka ek taraf ka safar kitne minute ka hai.", None),
         "chTravel": ("How do children get to school?", "The main way the child travels.", "Bachay school kaise jate hain: paidal, rickshaw/van, gaari, school transport wagera.", None),

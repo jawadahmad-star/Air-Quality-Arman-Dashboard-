@@ -73,6 +73,8 @@ FIELD_HOURS = tuple(CFG.get("field_hours", [7, 21]))
 MIN_CELL = int(CFG.get("small_cell_min", 5))
 PREFER = CFG.get("prefer", "dta")
 ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
+USE_REVISED = bool(CFG.get("use_revised_bid_for_draw", True))   # class outcome uses the revised bid + new draw when a parent changed their bid
+CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.30))
 
 # columns that identify a person, a household or a device: dropped on load
 PII_EXACT = {"fname", "lname", "address", "phone_mobile", "phone_landline", "mobile_number", "name_child",
@@ -377,14 +379,26 @@ def lab_of(ln, code):
 
 # ---------------------------------------------------------------- frame
 frame = None
-frame_path = next((p for p in FRAME_CANDIDATES if p.exists()), None)
+_fc = ([DATA_DIR / "_dummy" / "prefill_dummy.xlsx"] if mode == "demo" else []) + FRAME_CANDIDATES
+frame_path = next((p for p in _fc if p.exists()), None)
 if frame_path:
-    _f = pd.read_excel(frame_path, usecols=[0, 1, 2]).dropna()
-    _f.columns = ["hh_id", "order_key", "ap_lm_arm"]
-    frame = _f.astype(int).drop_duplicates("hh_id").set_index("hh_id")
+    _raw = pd.read_excel(frame_path)
+    _raw.columns = [str(c).strip().lower() for c in _raw.columns]
+    _f = _raw.iloc[:, :3].copy(); _f.columns = ["hh_id", "order_key", "ap_lm_arm"]
+    for _t, _names in (("school", ("school", "school_name", "campus")), ("grade", ("grade", "class", "class_grade")),
+                       ("section", ("section", "sec")), ("class_size", ("class_size", "class_n"))):
+        _c = next((n for n in _names if n in _raw.columns), None)
+        if _c:
+            _f[_t] = _raw[_c]
+    _f = _f.dropna(subset=["hh_id", "order_key", "ap_lm_arm"])
+    _f[["hh_id", "order_key", "ap_lm_arm"]] = _f[["hh_id", "order_key", "ap_lm_arm"]].astype(int)
+    frame = _f.drop_duplicates("hh_id").set_index("hh_id")
     say(f"Frame     : {len(frame)} households ({frame_path.name})")
 else:
     say("Frame     : none found - targets derived from the data")
+HAS_FRAME_CLASS = frame is not None and {"school", "grade"} <= set(frame.columns)
+if frame is not None and not HAS_FRAME_CLASS:
+    say("Frame     : no school / grade columns - classes are read from the school_child and grade_child text (add school + grade to the frame for reliable classes)")
 
 
 # ====================================================================== prepare analysis columns
@@ -419,6 +433,45 @@ if _latcols and _loncols:
     D["_gps"] = (pd.to_numeric(D[_latcols[0]].replace("", np.nan), errors="coerce").notna() &
                  pd.to_numeric(D[_loncols[0]].replace("", np.nan), errors="coerce").notna())
 D["_gps_col"] = bool(_latcols)
+D = D.copy()
+
+# ---- school and class of each household: from the frame, else from what the enumerator typed
+_short = lambda x: re.sub(r"^(govt\.?|government)\s+", "", str(x).strip(), flags=re.I)
+
+
+def _grade_of(t):
+    m = re.search(r"\d+", str(t)); return float(m.group()) if m else np.nan
+
+
+def _sec_of(t):
+    m = re.search(r"\d+\s*[-_ ]?\s*([A-Za-z])", str(t)); return m.group(1).upper() if m else ""
+
+
+def _ckey_of(sch, gr, sec):
+    return f"{str(sch).strip()}|{int(gr)}|{str(sec).strip().upper()}"
+
+
+def _cls_label(ck):
+    sch, gr, sec = str(ck).split("|")
+    return f"{_short(sch)} · Class {gr}" + (f"-{sec}" if sec else "")
+
+
+_txt_sch = (D["school_child"] if "school_child" in D else pd.Series("", index=D.index)).astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+_txt_gr = D["grade_child"] if "grade_child" in D else pd.Series("", index=D.index)
+D["_sch"] = _txt_sch.where(_txt_sch != "", np.nan)
+D["_gradeN"] = _txt_gr.map(_grade_of)
+D["_sec"] = _txt_gr.map(_sec_of)
+if HAS_FRAME_CLASS:
+    frame["_gradeN"] = pd.to_numeric(frame["grade"], errors="coerce")
+    frame["_sec"] = frame["section"].fillna("").astype(str).str.strip().str.upper() if "section" in frame else ""
+    frame["_sch"] = frame["school"].astype(str).str.strip()
+    frame["_ckey"] = [_ckey_of(a_, b_, c_) if pd.notna(b_) else np.nan for a_, b_, c_ in zip(frame["_sch"], frame["_gradeN"], frame["_sec"])]
+    D["_sch"] = D["_hh"].map(frame["_sch"]).fillna(D["_sch"])
+    D["_gradeN"] = D["_hh"].map(frame["_gradeN"]).fillna(D["_gradeN"])
+    D["_sec"] = D["_hh"].map(frame["_sec"]).fillna(D["_sec"])
+D["_sec"] = D["_sec"].fillna("")
+D["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(D["_sch"], D["_gradeN"], D["_sec"])]
+D["_cls"] = D["_ckey"].map(lambda k: _cls_label(k) if pd.notna(k) else np.nan)
 D = D.copy()
 
 # ---- PII guard: drop, then assert
@@ -464,15 +517,22 @@ _chg = (num(C, "change_pay") == 1) & num(C, "change_pay_w").notna()
 C["_bid"] = np.where(_chg, num(C, "change_pay_w"), C["_bid0"])
 C["_bid"] = pd.to_numeric(C["_bid"], errors="coerce")
 C["_bonus"] = num(C, "contribute_will_bonus")
-C["_rand"] = num(C, "main_contribute_rand_number")
-C["_paid"] = np.where(C["_rand"].notna() & C["_bid"].notna(), np.where(C["_rand"] <= C["_bid"], C["_rand"], 0), np.nan)
-C["_hit"] = np.where(C["_rand"].notna() & C["_bid"].notna(), (C["_rand"] <= C["_bid"]).astype(float), np.nan)
+# the draw that decides whether a parent contributes: the revised bid meets the new random number,
+# otherwise the original bid meets the first one (config: use_revised_bid_for_draw)
+_r0, _r1 = num(C, "main_contribute_rand_number"), num(C, "change_rand_number")
+_use_new = _chg & _r1.notna() & USE_REVISED
+C["_rand"] = np.where(_use_new, _r1, _r0)
+C["_bid_d"] = np.where(_use_new, C["_bid"], C["_bid0"])
+C["_bid_d"] = pd.to_numeric(C["_bid_d"], errors="coerce")
+_ok = C["_rand"].notna() & C["_bid_d"].notna()
+C["_paid"] = np.where(_ok, np.where(C["_rand"] <= C["_bid_d"], C["_rand"], 0), np.nan)
+C["_hit"] = np.where(_ok, (C["_rand"] <= C["_bid_d"]).astype(float), np.nan)
+C["_pclear"] = np.where(C["_bid_d"].notna(), (C["_bid_d"].clip(0, 2000) + 1) / 2001.0, np.nan)   # chance a random price clears this bid
 C["_income"] = num(C, "hh_income")
 C["_age"] = num(C, "age")
 C["_hhsize"] = num(C, "hh_member")
 
-_gr = C["grade_child"].astype(str).str.extract(r"(\d+)")[0] if "grade_child" in C else pd.Series(np.nan, index=C.index)
-C["_grade"] = pd.to_numeric(_gr, errors="coerce")
+C["_grade"] = C["_gradeN"]
 _ex = C["grade_exam"].astype(str).str.extract(r"(\d+(?:\.\d+)?)")[0] if "grade_exam" in C else pd.Series(np.nan, index=C.index)
 C["_exam"] = pd.to_numeric(_ex, errors="coerce").where(lambda s: (s >= 0) & (s <= 100))
 
@@ -496,6 +556,12 @@ for v, l in CH.get("area", []):
 for v, l in CH.get("gender", []):
     if v in (1, 2):
         SEG_DEFS.append((f"g{v}", l, "Respondent gender", (lambda vv: lambda d: num(d, "gender") == vv)(v)))
+
+for _gv in sorted(C["_gradeN"].dropna().unique()):
+    SEG_DEFS.append((f"cls{int(_gv)}", f"Class {int(_gv)}", "Class grade", (lambda vv: lambda d: d["_gradeN"] == vv)(_gv)))
+_schools = sorted(C["_sch"].dropna().unique())
+for _i, _sn in enumerate(_schools, start=1):
+    SEG_DEFS.append((f"sch{_i}", _short(_sn), "School", (lambda nm: lambda d: d["_sch"] == nm)(_sn)))
 
 SEGS, SEG_META = {}, []
 for key, label, group, fn in SEG_DEFS:
@@ -768,16 +834,82 @@ for arm in (0, 1, 2):
         blocks.append({"bin": f"{ARM_LAB[arm]} · order {o}", "sub": ORD_LAB[o], "done": dn, "target": tgt, "pct": p_,
                        "status": "Completed" if dn >= tgt else ("In Progress" if dn else "Not Started"), "arm": arm})
 
+# ---- classrooms: the 30% rule is applied class by class
+def _binom_tail(n, p, k):
+    """P(X >= k) for X ~ Binomial(n, p)"""
+    if k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    p = min(max(float(p), 0.0), 1.0)
+    return float(sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k, n + 1)))
+
+
+C["_tpar"] = num(C, "total_parents").fillna(num(C, "total_parents_2"))
+_overall_p = float(np.nanmean(C["_pclear"])) if C["_pclear"].notna().any() else 0.0
+CLS_COLOR = {"Secured": 6, "On track": 3, "At risk": 8, "Cannot reach": 2, "Not started": "muted"}
+CLS_TONE = {"Secured": "good", "On track": "info", "At risk": "amber", "Cannot reach": "bad", "Not started": "grey"}
+if HAS_FRAME_CLASS:
+    _uni = frame.dropna(subset=["_ckey"]).groupby("_ckey").size()
+    _uni_size = frame.dropna(subset=["_ckey"]).groupby("_ckey")["class_size"].median() if "class_size" in frame else None
+else:
+    _uni = D.dropna(subset=["_ckey"]).groupby("_ckey")["_hh"].nunique()
+    _uni_size = None
+class_rows = []
+for _ck, _target in _uni.items():
+    _g = C[C["_ckey"] == _ck]
+    _nd = len(_g)
+    _sizes = _g["_tpar"].dropna()
+    if len(_sizes):
+        _size = int(_sizes.median())
+    elif _uni_size is not None and pd.notna(_uni_size.get(_ck)):
+        _size = int(_uni_size[_ck])
+    else:
+        _size = int(_target)
+    _needed = int(_size * CLASS_THRESHOLD)                                     # same rule as the form: int(total_parents x 0.30)
+    _hits = int(np.nansum(_g["_hit"])) if _nd else 0
+    _rem = max(int(_target) - _nd, 0)                                          # parents not yet interviewed never count as contributing
+    _pbar = float(np.nanmean(_g["_pclear"])) if _nd >= 5 and _g["_pclear"].notna().any() else _overall_p
+    _chance = _binom_tail(_rem, _pbar, _needed - _hits)
+    if _nd == 0:
+        _st = "Not started"
+    elif _hits >= _needed:
+        _st = "Secured"
+    elif _hits + _rem < _needed:
+        _st = "Cannot reach"
+    elif _chance >= 0.5:
+        _st = "On track"
+    else:
+        _st = "At risk"
+    _sch, _gr, _sec = _ck.split("|")
+    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _nd,
+                       "size": _size, "needed": _needed, "hits": _hits, "rem": _rem, "rate": 100.0 * _hits / _size if _size else 0.0,
+                       "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
+                       "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid_d"])})
+class_rows.sort(key=lambda r: (r["school"], r["grade"], r["sec"]))
+CLS_LABEL = {r["key"]: r["label"] for r in class_rows}
+n_cls = len(class_rows)
+cls_n = {k: sum(1 for r in class_rows if r["status"] == k) for k in CLS_COLOR}
+cls_expected = sum(r["chance"] for r in class_rows)
+cls_schools = sorted({r["school"] for r in class_rows})
+
 # ---- household coverage by area
 wtp_all = C["_bid"]
 wtp_mean = avg(wtp_all)
 share_pos = sh(wtp_all, lambda s: s > 0)
 
+school_blocks = []
+for _sn in cls_schools:
+    _cr = [r for r in class_rows if r["school"] == _sn]
+    _t, _d = sum(r["target"] for r in _cr), sum(r["done"] for r in _cr)
+    school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured",
+                          "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started")})
+
 ov_kpis = [
     K("✅", fmt_n(N_C), "Completed Interviews", f"{META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
     K("🎯", fmt_n(remaining), "Households Remaining", f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted", "navy", "navy"),
     K("🚪", fmt_n(N_ATT), "Fieldwork Attempts", f"{conv:.0f}% ended in a completed interview", "neutral", "teal"),
-    K("🏠", f"{hh_reached} / {len(frame) if frame is not None else N_TARGET}", "Households Reached", "At least one visit recorded", "navy", "purple"),
+    K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"30% of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
     K("⏱️", r1(med_dur) if med_dur is not None else "—", "Median Interview (min)", f"Across {n_field_days} field days", "up", "amber"),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
 ]
@@ -790,6 +922,9 @@ ov_callouts = [
 
 # ---- key findings (auto-written from the data)
 kf = []
+if n_cls and N_C:
+    kf.append({"cls": "teal", "html": f"<strong>Classrooms:</strong> <strong>{cls_n['Secured']}</strong> of {n_cls} classes have already reached the 30% contribution rule and would get a purifier; "
+               f"<strong>{cls_n['On track']}</strong> more are on track and <strong>{cls_n['At risk']}</strong> are at risk. Expected by the end of fieldwork: about <strong>{cls_expected:.0f}</strong> of {n_cls}."})
 if N_C:
     kf.append({"cls": "primary", "html": f"<strong>Willingness to pay:</strong> the average parent would contribute <strong>{fmt_rs(wtp_mean)}</strong> "
                f"(median {fmt_rs(med(wtp_all))}); <strong>{fmt_p(share_pos)}</strong> bid above zero and "
@@ -811,8 +946,8 @@ kf.append({"cls": "teal", "html": f"<strong>Pace:</strong> {per_day:.1f} complet
 
 overview = {
     "id": "overview", "tab": "📊 Overview", "eyebrow": "Section 01", "title": "Programme at a Glance",
-    "blurb": f"Where fieldwork stands against the {N_TARGET:,}-household sample: completed interviews, how the three randomised study arms are filling, "
-             "what happened at every attempt, and the headline findings so far.",
+    "blurb": f"Where fieldwork stands against the {N_TARGET:,}-household sample across {n_cls} classes in {len(cls_schools)} schools: completed interviews, how many classrooms are on course for a purifier, "
+             "how the three randomised study groups are filling, and the headline findings so far.",
     "seg": False, "blocks": [
         {"t": "kpis", "d": ov_kpis},
         {"t": "callouts", "d": ov_callouts},
@@ -830,11 +965,85 @@ overview = {
             card("hbar", "ovDisp", "Attempt Disposition", "Outcome of every fieldwork attempt recorded so far", {"items": disp, "base": N_ATT}, var="status_survey", opt={"color": 2, "fmt": "n"})]},
         {"t": "grid", "cols": 2, "cards": [
             card("funnel", "ovFunnel", "From Attempt to Analysed Interview", "How many attempts survive each stage", {"rows": funnel}),
-            card("blocks", "ovBlocks", "Progress by Assignment Block", "Study arm × order in which beliefs about other parents were asked", {"rows": blocks})]},
-        {"t": "note", "html": f"Sampling frame: <strong>{N_TARGET:,}</strong> households pre-assigned to study arm and question order (Control = {arm_target[0]}, Video 1 = {arm_target[1]}, Video 2 = {arm_target[2]}). "
+            card("blocks", "ovBlocks", "Progress by School", "Completed interviews against the parents listed in each school's classes", {"rows": school_blocks})]},
+        {"t": "note", "html": f"Sampling frame: <strong>{N_TARGET:,}</strong> households in <strong>{n_cls}</strong> classes, pre-assigned to study arm and question order (Control = {arm_target[0]}, Video 1 = {arm_target[1]}, Video 2 = {arm_target[2]}). "
                              "Completed = <code>status_survey</code> is “Completed”, counted once per household. Research Solutions (M&amp;A Research Solutions LLC) | www.rs.org.pk"},
     ]}
 PANELS.append(overview)
+
+# ====================================================================== PANEL - CLASSROOMS (the 30% rule)
+_cls_sorted = sorted(class_rows, key=lambda r: (-(r["hits"] / r["needed"] if r["needed"] else 0), r["label"]))
+_pill = lambda k: {"v": {"Secured": 4, "On track": 3, "At risk": 2, "Cannot reach": 1, "Not started": 0}[k], "t": k, "tone": CLS_TONE[k]}
+cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "size", "l": "Class size", "num": True},
+                      {"k": "done", "l": "Interviewed", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
+                      {"k": "need", "l": "Needed (30%)", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
+                      {"k": "chance", "l": "Chance of reaching 30%", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
+             "rows": [{"school": r["school"], "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
+                       "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "hits": r["hits"], "need": r["needed"],
+                       "rate": {"v": round(r["rate"], 1), "t": f"{r['rate']:.0f}%"}, "chance": {"v": round(100 * r["chance"], 1), "t": f"{100 * r['chance']:.0f}%"},
+                       "st": _pill(r["status"])} for r in class_rows],
+             "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above 30%. A class can still change until every parent is interviewed."}
+_prog = lambda r: 100.0 * r["hits"] / r["needed"] if r["needed"] else 0.0            # contributors so far as a share of the number needed
+cls_bars = {"items": [{"l": r["label"], "v": round(_prog(r), 1), "p": round(_prog(r), 1), "n": r["hits"], "lab": f"{r['hits']} of {r['needed']}", "slot": CLS_COLOR[r["status"]],
+                       "tip": f"{r['hits']} contributing, {r['needed']} needed (30% of {r['size']}) · {r['done']} of {r['target']} interviewed · {r['status']}"} for r in _cls_sorted],
+            "base": None}
+if _cls_sorted:
+    _near = [r for r in _cls_sorted if r["status"] in ("On track", "At risk")]
+    _near.sort(key=lambda r: r["needed"] - r["hits"])
+    cls_bars["read"] = (f"Furthest ahead: <strong>{_cls_sorted[0]['label']}</strong> ({_cls_sorted[0]['hits']} of {_cls_sorted[0]['needed']} needed). Furthest behind: <strong>{_cls_sorted[-1]['label']}</strong> ({_cls_sorted[-1]['hits']} of {_cls_sorted[-1]['needed']}). "
+                        + (f"Closest to the line and not yet secured: <strong>{_near[0]['label']}</strong> ({_near[0]['hits']} of {_near[0]['needed']} needed)." if _near else ""))
+cls_status = {"items": [{"l": k, "n": v, "p": pct(v, n_cls)} for k, v in cls_n.items() if v], "base": n_cls,
+              "read": f"<strong>{cls_n['Secured']}</strong> secured, <strong>{cls_n['On track']}</strong> on track, <strong>{cls_n['At risk']}</strong> at risk, <strong>{cls_n['Cannot reach']}</strong> cannot reach 30%, <strong>{cls_n['Not started']}</strong> not started."}
+_rates = [_prog(r) for r in class_rows if r["done"] > 0]
+_bins = [(0, 25), (25, 50), (50, 75), (75, 100), (100, 100000)]
+_bl = ["Under 25%", "25–49%", "50–74%", "75–99%", "Secured (100%+)"]
+cls_dist = {"items": [{"l": l, "n": sum(1 for x in _rates if lo <= x < hi), "p": pct(sum(1 for x in _rates if lo <= x < hi), len(_rates)),
+                       "slot": 6 if lo >= 100 else (3 if lo >= 75 else (8 if lo >= 50 else 2))} for (lo, hi), l in zip(_bins, _bl)], "base": len(_rates), "hist": True}
+if cls_dist["items"] and _rates:
+    _top = max(cls_dist["items"], key=lambda i: i["n"])
+    cls_dist["read"] = f"Most classes ({_top['n']} of {len(_rates)}) are in the <strong>{_top['l']}</strong> group."
+_sch_rows = []
+for _sn in cls_schools:
+    _cr = [r for r in class_rows if r["school"] == _sn]
+    _sch_rows.append({"l": _sn, "p": [pct(sum(1 for r in _cr if r["status"] == k), len(_cr)) for k in CLS_COLOR], "c": [sum(1 for r in _cr if r["status"] == k) for k in CLS_COLOR], "n": len(_cr)})
+_all_ok = [r["l"] for r in _sch_rows if r["c"][0] + r["c"][1] == r["n"]]
+cls_school = {"cats": list(CLS_COLOR), "rows": _sch_rows,
+              "read": f"<strong>{len(_all_ok)}</strong> of {len(_sch_rows)} schools have every class secured or on track" + (f" ({', '.join(_all_ok[:4])}{'…' if len(_all_ok) > 4 else ''})." if _all_ok else ".")}
+by_arm_hit = [(ARM_LAB[v], sh(C.loc[C["_arm"] == v, "_hit"], lambda x: x == 1), int((C["_arm"] == v).sum())) for v in (0, 1, 2)]
+cls_arm = {"items": [{"l": f"{l} (n = {n})", "v": r1(x), "p": r1(x), "n": n, "slot": [7, 3, 5][i]} for i, (l, x, n) in enumerate(by_arm_hit) if x is not None], "base": N_C}
+if len(cls_arm["items"]) == 3:
+    cls_arm["read"] = ("Share whose random price cleared their bid: " + " · ".join(f"{a}: <strong>{x:.0f}%</strong>" for a, x, _ in by_arm_hit) +
+                       ". More contributors per class means more classes reach the 30% rule.")
+
+PANELS.append({
+    "id": "classes", "tab": "🏫 Classrooms", "eyebrow": "Section 02 · The 30% rule, class by class", "title": "Which Classrooms Get a Purifier?",
+    "blurb": "A purifier goes into a classroom only if at least 30% of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not yet interviewed count as not contributing, so a class can still move until every parent is reached.",
+    "seg": False, "blocks": [
+        {"t": "insight_static", "cls": "navy", "html": "<strong>🏫 How a class gets its purifier:</strong> each parent names the most they would pay. A random price is drawn: if it is at or below the bid, that parent contributes the random price. "
+                   "If <strong>at least 30% of all parents in the class</strong> (for a class of 30, that is 9 parents) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
+        {"t": "kpis", "d": [
+            K("🏫", n_cls, "Classes in the Study", f"{len(cls_schools)} schools · classes {int(min(r['grade'] for r in class_rows)) if class_rows else '—'}–{int(max(r['grade'] for r in class_rows)) if class_rows else '—'}", "navy", "navy"),
+            K("✅", cls_n["Secured"], "Purifier Secured", "30% of the class already contributing", "up", "green"),
+            K("📈", cls_n["On track"], "On Track", "Likely to get there as parents are interviewed", "up", "teal"),
+            K("⚠️", cls_n["At risk"], "At Risk", "Unlikely at the current contribution rate", "neutral", "amber"),
+            K("⛔", cls_n["Cannot reach"], "Cannot Reach 30%", "Even if every remaining parent contributed", "down", ""),
+            K("🎯", f"{cls_expected:.1f}", "Expected Classes With a Purifier", f"Of {n_cls}, at the end of fieldwork, from current bids", "neutral", "purple")]},
+        {"t": "grid", "cols": 2, "cards": [
+            card("donut", "clStatus", "Where do the classes stand?", "Number of classes in each status", cls_status, opt={"colors": [CLS_COLOR[k] for k in CLS_COLOR if cls_n[k]], "fmt": "n"}),
+            card("bar", "clDist", "How many classes are near the target?", "Classes grouped by how much of the contributors they need they already have", cls_dist, opt={"fmt": "n"})]},
+        {"t": "grid", "cols": 1, "cards": [
+            card("hbar", "clBars", "How close is each class to the 30% line?", "Contributors so far as a share of the number the class needs (30% of the class). The dashed line is 100%: class secured.", cls_bars,
+                 opt={"fmt": "num1", "sfx": "%", "ref": 100, "refLabel": "Number needed", "legend": [[k, CLS_COLOR[k]] for k in ("Secured", "On track", "At risk", "Cannot reach")]}, full=True)]},
+        {"t": "grid", "cols": 2, "cards": [
+            card("likert", "clSchool", "How do each school's classes split?", "Each bar is one school; the colours are its classes' status", cls_school, opt={"pal": "status", "counts": True, "slots": [CLS_COLOR[k] for k in CLS_COLOR]}),
+            card("hbar", "clArm", "Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group", cls_arm, opt={"fmt": "num1", "sfx": "%", "color": 1})]},
+        {"t": "grid", "cols": 1, "cards": [
+            card("table", "clTable", "Every class, one line each", "Click a column to sort, or filter by school. “Chance” is the probability of reaching 30% once the parents still to interview are counted.", cls_table,
+                 opt={"sortKey": "rate", "filterKey": "school", "filterVals": ["All"] + cls_schools}, full=True)]},
+        {"t": "note", "html": "Needed = 30% of the class size reported in the interviews (rounded down), the same rule the questionnaire uses. Contributing counts parents whose random price was at or below their bid "
+                             "(the revised bid and new draw where a parent changed their bid). Chance of reaching 30% assumes parents still to be interviewed contribute at the class's average rate so far."},
+    ]})
+
 
 # ====================================================================== PANEL 2 - FIELD OPERATIONS
 cum, run = [], 0
@@ -899,6 +1108,7 @@ if frame is not None:
     qa("Household not in assignment frame", "Completed submissions with an ID outside the frame (excluded)", n_out_of_frame, n_out_of_frame + len(comp_all))
 qa("Completed but no bid", "Completed interviews with no willingness-to-pay amount", int(C["_bid"].isna().sum()), N_C)
 qa("Implausible income", "Monthly household income under Rs 5,000 or over Rs 1,000,000", int(((C["_income"] < 5000) | (C["_income"] > 1_000_000)).sum()), N_C)
+qa("Class size entered inconsistently", "Classes where interviews report different class sizes", sum(r["incons"] for r in class_rows), n_cls)
 n_flag_total = sum(r["n"] for r in qa_rows)
 
 # ---- enumerator scorecard
@@ -1040,7 +1250,7 @@ PANELS.append({
     "seg": True, "blocks": [
         {"t": "kpis", "d": SD(child_kpis)},
         {"t": "grid", "cols": 3, "cards": [
-            card("bar", "chGrade", "Child's grade", "Class of the child in the study classroom", SD(f_hist(lambda d: d["_grade"], [1, 6, 7, 8, 9, 10, 13], ["≤5", "6", "7", "8", "9", "10+"])), var="grade_child", opt={"color": 1}),
+            card("bar", "chGrade", "Child's grade", "Class of the child in the study classroom", SD(f_hist(lambda d: d["_grade"], [0, 4, 5, 6, 7, 100], ["Up to 3", "Class 4", "Class 5", "Class 6", "Class 7+"])), var="grade_child", opt={"color": 1}),
             card("bar", "chExam", "Most recent exam result", "Percent, mid-term or final, as reported by the parent", SD(f_hist(lambda d: d["_exam"], [0, 50, 60, 70, 80, 90, 101], ["<50", "50–59", "60–69", "70–79", "80–89", "90+"])), var="grade_exam", opt={"color": 6}),
             card("bar", "chTime", "Commute time to school", "Minutes, one way", SD(f_hist(lambda d: num(d, "time_reach"), [0, 10, 20, 30, 45, 1000], ["<10", "10–19", "20–29", "30–44", "45+"])), var="time_reach", opt={"color": 4})]},
         {"t": "grid", "cols": 2, "cards": [
@@ -1117,7 +1327,7 @@ def wtp_kpis(df):
     return [
         K("💰", fmt_rs(avg(b)), "Mean Willingness to Pay", f"Median {fmt_rs(med(b))}", "up", "green"),
         K("🙋", fmt_p(sh(b, lambda s: s > 0)), "Bid Above Zero", f"{fmt_p(sh(b, lambda s: s >= 2000))} bid the Rs 2,000 maximum", "neutral", "teal"),
-        K("🎯", fmt_rs(tp), "Highest Price 3 in 10 Would Pay", "The classroom needs 30% of parents to contribute", "up", "purple"),
+        K("🎯", fmt_rs(tp), "Highest Price 3 in 10 Would Pay", "Each class needs 30% of its own parents to contribute", "up", "purple"),
         K("🔄", fmt_p(sh(num(df, "change_pay"), lambda s: s == 1)), "Revised Their Bid", f"Mean bid {fmt_rs(avg(df['_bid0']))} → {fmt_rs(avg(b))}", "neutral", "amber"),
         K("🎲", fmt_p(pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None), "Would Have Paid", "Bid was at or above the random price drawn", "navy", "navy"),
         K("💸", fmt_rs(avg(df["_paid"])), "Mean Amount Paid", "Realised by the random-price rule", "navy", ""),
@@ -1151,7 +1361,7 @@ def wtp_ins(df):
     if len(ratio):
         exp_ = 100 * float(ratio.mean())
     real = pct(int(df["_hit"].sum()), int(df["_hit"].notna().sum())) if df["_hit"].notna().any() else None
-    out = [{"cls": "primary", "html": f"<strong>The threshold:</strong> a classroom gets a purifier only if 30% of parents contribute. Bids clear that bar up to <strong>{fmt_rs(thr_price(b))}</strong>; above it the classroom would not reach 30%."}]
+    out = [{"cls": "primary", "html": f"<strong>The threshold:</strong> a classroom gets a purifier only if 30% of its parents contribute. Across all parents in this view, bids clear that bar up to <strong>{fmt_rs(thr_price(b))}</strong>. The class-by-class result is in the Classrooms tab."}]
     if exp_ is not None and real is not None:
         out.append({"cls": "navy", "html": f"<strong>Beliefs about other parents:</strong> parents expect <strong>{exp_:.0f}%</strong> of other parents to contribute; on the random-price rule <strong>{real:.0f}%</strong> of respondents' own bids would contribute. {'Parents underestimate their peers.' if exp_ < real else 'Parents overestimate their peers.'}"})
     return out
@@ -1194,7 +1404,7 @@ def d_demand(df):
 
 PANELS.append({
     "id": "wtp", "tab": "💰 Willingness to Pay", "eyebrow": "Section 06 · Incentive-compatible elicitation (BDM)", "title": "Willingness to Pay for a Classroom Air Purifier",
-    "blurb": "Each parent states the most they would contribute towards an air purifier for their child's classroom, then a random price is drawn: they pay the random price only if their bid is at least as high, which makes an honest bid the best strategy. The classroom gets a purifier if 30% of parents contribute.",
+    "blurb": "Each parent states the most they would contribute towards an air purifier for their child's classroom, then a random price is drawn: they pay the random price only if their bid is at least as high, which makes an honest bid the best strategy. A classroom gets a purifier only if 30% of its own parents end up contributing (see the Classrooms tab).",
     "seg": True, "blocks": [
         {"t": "kpis", "d": SD(wtp_kpis)},
         {"t": "grid", "cols": 1, "cards": [
@@ -1232,6 +1442,7 @@ te_kpis.append(K("🔀", fmt_rs(avg(C.loc[ords[2], "_bid"])), "Beliefs After Bid
 OUTCOMES = [
     ("Mean bid (Rs)", "rs", lambda d: d["_bid"]),
     ("Mean bonus-round bid (Rs)", "rs", lambda d: d["_bonus"]),
+    ("Would have contributed (random price cleared the bid)", "pp", lambda d: d["_hit"]),
     ("Bid above zero", "pp", lambda d: (d["_bid"] > 0).astype(float).where(d["_bid"].notna())),
     ("Bid at the Rs 2,000 maximum", "pp", lambda d: (d["_bid"] >= 2000).astype(float).where(d["_bid"].notna())),
     ("Sees ≥50% higher child risk", "pp", lambda d: num(d, "risk_air_child").where(num(d, "risk_air_child").isin([1, 2, 3, 4, 5])).map(lambda v: np.nan if pd.isna(v) else float(v >= 4))),
@@ -1442,6 +1653,11 @@ for hid in ids:
     else:
         tr_rows.append({"id": int(hid), "arm": int(frame.loc[hid, "ap_lm_arm"]) if frame is not None else -1,
                         "o": int(frame.loc[hid, "order_key"]) if frame is not None else 0, "st": "Not visited", "att": 0, "e": "—", "last": "—", "min": None})
+_hh_ck = D.dropna(subset=["_ckey"]).groupby("_hh")["_ckey"].last().to_dict()
+for r in tr_rows:
+    _ck = frame.loc[r["id"], "_ckey"] if HAS_FRAME_CLASS and r["id"] in frame.index else _hh_ck.get(r["id"])
+    r["sc"] = _short(str(_ck).split("|")[0]) if isinstance(_ck, str) else "—"
+    r["cl"] = CLS_LABEL.get(_ck, "—") if isinstance(_ck, str) else "—"
 st_counts = {}
 for r in tr_rows:
     st_counts[r["st"]] = st_counts.get(r["st"], 0) + 1
@@ -1456,7 +1672,7 @@ PANELS.append({
     "seg": False, "blocks": [
         {"t": "kpis", "d": tr_kpis},
         {"t": "blocks", "head": "📐 Progress by assignment block", "d": blocks, "foot": "Each card is one study arm and question-order combination from the sampling frame. Target = households assigned to the block; completed = interviews done. This is the quickest check that all six blocks fill evenly."},
-        {"t": "tracker", "d": {"rows": tr_rows, "enums": sorted({r["e"] for r in tr_rows if r["e"] != "—"}), "arms": {str(k): v for k, v in ARM_LAB.items()}}},
+        {"t": "tracker", "d": {"rows": tr_rows, "enums": sorted({r["e"] for r in tr_rows if r["e"] != "—"}), "arms": {str(k): v for k, v in ARM_LAB.items()}, "schools": cls_schools, "classes": [r["label"] for r in class_rows]}},
         {"t": "note", "html": "One row per household ID in the frame. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},
     ]})
 
@@ -1473,7 +1689,8 @@ def _all_cards():
                     yield p, c
 
 
-for p in PANELS:
+for _i, p in enumerate(PANELS, start=1):
+    p["eyebrow"] = re.sub(r"^Section \d+", f"Section {_i:02d}", p["eyebrow"])
     p["tab"] = TX.TABS.get(p["id"], p["tab"])
     p["short"] = TX.SHORT.get(p["id"], "")
     if p["id"] in TX.PANEL_TITLE:

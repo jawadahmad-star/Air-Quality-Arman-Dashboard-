@@ -93,7 +93,7 @@
     .navwrap { position:sticky; top:0; z-index:100; background:var(--rs-navy-dark); border-bottom:3px solid var(--rs-red); box-shadow:0 6px 20px rgba(0,0,0,.28); }
     .navwrap-in { max-width:1440px; margin:0 auto; padding:0 24px; }
     .nav-tabs { display:flex; gap:2px; padding-top:4px; }
-    .nav-tab { flex:1 1 auto; display:flex; align-items:center; justify-content:center; gap:6px; padding:11px 10px; font-size:12.5px; font-weight:500; color:rgba(255,255,255,.62); cursor:pointer;
+    .nav-tab { flex:1 1 auto; display:flex; align-items:center; justify-content:center; gap:5px; padding:11px 7px; font-size:12.5px; font-weight:500; color:rgba(255,255,255,.62); cursor:pointer;
                border-radius:8px 8px 0 0; border:none; background:transparent; white-space:nowrap; transition:color .2s, background .2s; letter-spacing:.1px; }
     .nav-tab:hover { color:#fff; background:rgba(255,255,255,.08); }
     .nav-tab.active { color:var(--text); background:var(--bg); font-weight:700; box-shadow:inset 0 2px 0 var(--rs-red); }
@@ -244,6 +244,13 @@
     .vd-good { background:var(--tint-green); color:var(--on-tint-green); }
     .vd-amber { background:var(--tint-amber); color:var(--on-tint-amber); }
     .vd-grey { background:var(--track); color:var(--text-2); }
+    .vd-info { background:var(--tint-teal); color:var(--on-tint-teal); }
+    .vd-bad { background:var(--tint-red); color:var(--on-tint-red); }
+    .lg-row { display:flex; flex-wrap:wrap; gap:6px 16px; margin:-4px 0 12px 13px; font-size:12px; color:var(--text-2); }
+    .lg-i i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+    .seg-select { border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-size:12px; font-weight:600; padding:5px 10px; border-radius:99px; cursor:pointer; max-width:150px; }
+    .seg-select.on { background:var(--rs-navy); border-color:var(--rs-navy); color:#fff; }
+    html[data-theme="dark"] .seg-select.on { background:var(--rs-red); border-color:var(--rs-red); }
 
     .land-prog-head { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-2); margin:26px 0 12px; }
     .land-prog { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:6px; }
@@ -624,20 +631,25 @@ function barChart(id, c, d, horizontal){
   const o = c.opt || {}, fmt = o.fmt || 'pct', sfx = o.sfx != null ? o.sfx : (fmt === 'pct' ? '%' : '');
   const its = d.items, vals = its.map(i => valOf(i, fmt)), cw = cardW(id), tight = cw < 420;
   if (!horizontal && tight && (its.some(i => i.l.length > 9) || (its.length >= 6 && its.some(i => i.l.length > 5)))) horizontal = true;   // long labels read better lying down on a narrow card
-  const colors = o.colors ? its.map((_, k) => col(o.colors[k % o.colors.length])) : col(o.color || 1);
+  const colors = its.some(i => i.slot != null) ? its.map(i => col(i.slot)) : (o.colors ? its.map((_, k) => col(o.colors[k % o.colors.length])) : col(o.color || 1));
   const many = its.length > 6;
+  const refPlugin = (horizontal && o.ref != null) ? [{id:'ref', afterDatasetsDraw(ch){
+    const {ctx, chartArea, scales:{x}} = ch, px = x.getPixelForValue(o.ref);
+    ctx.save(); ctx.strokeStyle = CV('--text'); ctx.lineWidth = 1.6; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(px, chartArea.top); ctx.lineTo(px, chartArea.bottom); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = CV('--text'); ctx.font = '700 11px Inter'; ctx.textAlign = 'center'; ctx.fillText(o.refLabel || '', px, chartArea.top - 7); ctx.restore(); }}] : [];
   const catWrap = horizontal ? (tight ? 17 : 26) : (tight ? (many ? 6 : 9) : 12);
   const catTicks = {font:tickFont(), color:TXT(), autoSkip:false, maxRotation:0, minRotation:0, callback:function(v){ return wrapTick(this.getLabelForValue(v), catWrap); }};
   const valTicks = {font:tickFont(), color:TXT(), maxTicksLimit:6, callback:v => v.toLocaleString() + sfx};
   if (horizontal){ const lines = Math.ceil(Math.max(...its.map(i => i.l.length)) / catWrap); fitHeight(id, its.length, Math.max(tight ? 40 : 36, 17 * lines + 16), 50); }
   mk(id, {type:'bar',
     data:{labels:L(its), datasets:[{data:vals, backgroundColor:colors, borderRadius:6, maxBarThickness:horizontal ? 26 : 46}]},
-    options:baseOpts({ indexAxis:horizontal?'y':'x', layout:{padding:{top:horizontal?8:18, right:horizontal?(tight?34:42):8}},
+    options:baseOpts({ indexAxis:horizontal?'y':'x', layout:{padding:{top:horizontal?(o.ref != null ? 22 : 8):18, right:horizontal?(tight?34:42):8}},
       plugins:{legend:{display:false},
-        tooltip:{callbacks:{label:ctx => { const it = its[ctx.dataIndex]; return ' ' + dl(ctx.raw, sfx) + (it.n != null && fmt !== 'n' ? '  (n = ' + it.n + (d.base ? ' of ' + d.base : '') + ')' : ''); }}},
-        datalabels:{display:true, anchor:'end', align:horizontal?'right':'top', clamp:true, clip:false, color:TXT(), font:{family:'Inter',size:many && !horizontal && tight ? 9.5 : 11,weight:'700'}, formatter:v => dl(v, sfx)}},
+        tooltip:{callbacks:{label:ctx => { const it = its[ctx.dataIndex]; if (it.tip) return ' ' + it.tip; return ' ' + dl(ctx.raw, sfx) + (it.n != null && fmt !== 'n' ? '  (n = ' + it.n + (d.base ? ' of ' + d.base : '') + ')' : ''); }}},
+        datalabels:{display:true, anchor:'end', align:horizontal?'right':'top', clamp:true, clip:false, color:TXT(), font:{family:'Inter',size:many && !horizontal && tight ? 9.5 : 11,weight:'700'}, formatter:(v, ctx) => its[ctx.dataIndex].lab || dl(v, sfx)}},
       scales:{ x:{ticks: horizontal?valTicks:catTicks, grid:{display:!horizontal,color:GRID()}, border:{display:false}, ...(horizontal?{beginAtZero:true,grace:'16%'}:{})},
-               y:{ticks: horizontal?catTicks:valTicks, grid:{display:!horizontal,color:GRID()}, border:{display:false}, beginAtZero:true, ...(horizontal?{}:{grace:'16%'})}} }) });
+               y:{ticks: horizontal?catTicks:valTicks, grid:{display:!horizontal,color:GRID()}, border:{display:false}, beginAtZero:true, ...(horizontal?{}:{grace:'16%'})}} }),
+    plugins:refPlugin });
 }
 
 function donutChart(id, c, d){
@@ -690,14 +702,15 @@ function linesChart(id, c, d){
 
 function likertChart(id, c, d){
   const pal = (c.opt && c.opt.pal) || 'div', nw = narrow(), tight = cardW(id) < 520;
-  const colors = d.cats.map((_, k) => CV('--lk-' + pal + '-' + Math.min(k+1, 5)) || S(k+1));
-  fitHeight(id, d.rows.length, tight ? 84 : 62, tight ? 120 : 92);
+  const counts = !!(c.opt && c.opt.counts);
+  const colors = (c.opt && c.opt.slots) ? c.opt.slots.map(col) : d.cats.map((_, k) => CV('--lk-' + pal + '-' + Math.min(k+1, 5)) || S(k+1));
+  fitHeight(id, d.rows.length, tight ? 84 : (counts ? 40 : 62), tight ? 120 : (counts ? 84 : 92));
   mk(id, {type:'bar',
     data:{labels:d.rows.map(r => r.l), datasets:d.cats.map((cat, k) => ({label:cat, data:d.rows.map(r => r.p[k]), backgroundColor:colors[k], borderColor:CV('--surface'), borderWidth:2, borderRadius:3, maxBarThickness:34}))},
     options:baseOpts({ indexAxis:'y', layout:{padding:{top:2,right:8}},
       plugins:{legend:{position:'top',align:'start',labels:{font:{family:'Inter',size:nw?10.5:12},color:TXT(),boxWidth:11,padding:nw?8:12}},
-        tooltip:{callbacks:{label:x => ' ' + x.dataset.label + ': ' + x.raw + '%', footer:it => 'n = ' + d.rows[it[0].dataIndex].n}},
-        datalabels:{display:ctx => ctx.dataset.data[ctx.dataIndex] >= (nw ? 10 : 7), color:ctx => onColor(colors[ctx.datasetIndex]), font:{family:'Inter',size:nw?10:11,weight:'700'}, formatter:v => Math.round(v) + '%'}},
+        tooltip:{callbacks:{label:x => ' ' + x.dataset.label + ': ' + (counts ? d.rows[x.dataIndex].c[x.datasetIndex] + ' classes' : x.raw + '%'), footer:it => (counts ? 'classes: ' : 'n = ') + d.rows[it[0].dataIndex].n}},
+        datalabels:{display:ctx => ctx.dataset.data[ctx.dataIndex] >= (nw ? 10 : 7), color:ctx => onColor(colors[ctx.datasetIndex]), font:{family:'Inter',size:nw?10:11,weight:'700'}, formatter:(v, ctx) => counts ? d.rows[ctx.dataIndex].c[ctx.datasetIndex] : Math.round(v) + '%'}},
       scales:{x:{stacked:true, max:100, ticks:{font:tickFont(),color:TXT(),callback:v => v + '%'}, grid:{color:GRID()}, border:{display:false}},
               y:{stacked:true, ticks:{font:{family:'Inter',size:nw?11:11.5,weight:'600'},color:TXT(),autoSkip:false,callback:function(v){ return wrapTick(this.getLabelForValue(v), tight ? 26 : 44); }}, grid:{display:false}, border:{display:false}}}}) });
 }
@@ -796,14 +809,14 @@ function tableCardHTML(c, d){
   const st = tblState[c.id] || (tblState[c.id] = {key:(c.opt && c.opt.sortKey) || null, dir:-1, f:(c.opt && c.opt.filterVals) ? c.opt.filterVals[0] : null});
   const o = c.opt || {};
   let rows = d.rows.slice();
-  if (o.filterKey && st.f) rows = rows.filter(r => r[o.filterKey] === st.f);
+  if (o.filterKey && st.f && st.f !== 'All') rows = rows.filter(r => r[o.filterKey] === st.f);
   if (st.key && !o.noSort) rows.sort((a, b) => { const x = cellV(a[st.key]), y = cellV(b[st.key]); return (typeof x === 'string' ? String(x).localeCompare(y) : ((x == null ? -1e18 : x) - (y == null ? -1e18 : y))) * st.dir; });
   const filt = o.filterKey ? `<div class="tbl-filter">${o.filterVals.map(v => `<button class="seg-chip${v === st.f ? ' on' : ''}" data-tf="${esc(v)}">${esc(v)}</button>`).join('')}</div>` : '';
   const head = d.cols.map(cl => `<th class="${cl.num ? 'num' : ''}${o.noSort ? ' nosort' : ''}" data-k="${cl.k}">${esc(cl.l)}${st.key === cl.k ? `<span class="arrow">${st.dir === 1 ? '▲' : '▼'}</span>` : ''}</th>`).join('');
   const body = rows.map(r => '<tr>' + d.cols.map(cl => {
     const x = r[cl.k], t = cellT(x);
     if (cl.flags) return `<td class="left">${(t && t.length) ? t.map(f => `<span class="pill-flag">${esc(f)}</span>`).join('') : '<span class="badge badge-green">✓ none</span>'}</td>`;
-    if (cl.verdict) return `<td class="left"><span class="vd vd-${esc(x.tone)}">${x.tone === 'good' ? '✓ ' : x.tone === 'amber' ? '⚑ ' : ''}${esc(t)}</span></td>`;
+    if (cl.verdict) return `<td class="left"><span class="vd vd-${esc(x.tone)}">${({good:'✓ ', amber:'⚑ ', info:'↗ ', bad:'✕ '})[x.tone] || ''}${esc(t)}</span></td>`;
     if (cl.psig) return `<td class="num">${x.sig ? `<span class="p-sig">${esc(t)}</span>` : esc(t)}</td>`;
     if (cl.pflag) return `<td class="num">${x.flag ? `<span class="p-flag">⚑ ${esc(t)}</span>` : esc(t)}</td>`;
     return `<td class="${cl.num ? 'num' : 'left mz-strong'}">${esc(t)}</td>`;
@@ -900,7 +913,8 @@ function cardHTML(c){
   }
   const wrapCls = 'chart-wrap' + (c.tall ? ' tall' : '') + (c.auto ? ' auto' : '') + (!CANVAS.has(c.kind) && raw ? ' html' : '') + (raw == null ? ' auto' : '');
   const howto = c.help && raw ? `<button class="howto" data-act="help">ⓘ How to read this chart</button>` : '';
-  return `<div class="chart-card${c.full ? ' full' : ''}${c.kind === 'blocks' ? ' in-card' : ''}" data-card="${c.id}"><div class="card-head"><h3>${c.title}</h3>${tools}</div><div class="chart-desc">${c.desc}${base}</div>${howto}
+  const lg = c.opt && c.opt.legend && raw ? `<div class="lg-row">${c.opt.legend.map(([n, sl]) => `<span class="lg-i"><i style="background:${col(sl)}"></i>${esc(n)}</span>`).join('')}</div>` : '';
+  return `<div class="chart-card${c.full ? ' full' : ''}${c.kind === 'blocks' ? ' in-card' : ''}" data-card="${c.id}"><div class="card-head"><h3>${c.title}</h3>${tools}</div><div class="chart-desc">${c.desc}${base}</div>${lg}${howto}
     <div class="${wrapCls}">${inner}</div>${read}${c.var ? `<div class="card-var">Survey question: ${esc(c.var)}</div>` : ''}</div>`;
 }
 function bindCard(c){
@@ -960,28 +974,30 @@ function animateKpis(root){
   });
 }
 
-const tr = {q:'', st:'all', arm:'all', en:'all', key:'id', dir:1};
+const tr = {q:'', st:'all', arm:'all', en:'all', sc:'all', cl:'all', key:'id', dir:1};
 function trackerHTML(d){
   return `<div class="mz-toolbar">
     <input type="text" id="tr-search" class="mz-search" placeholder="🔍  Search household ID…" aria-label="Search household ID" value="${esc(tr.q)}" inputmode="numeric">
     <select id="tr-st" class="mz-filter" aria-label="Status"><option value="all">All statuses</option>${['Completed','Partial','Not reached','Refused','Ineligible','Not visited'].map(s => `<option${tr.st === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
     <select id="tr-arm" class="mz-filter" aria-label="Study group"><option value="all">All groups</option>${Object.entries(d.arms).map(([k, v]) => `<option value="${k}"${tr.arm === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
+    <select id="tr-sc" class="mz-filter" aria-label="School"><option value="all">All schools</option>${(d.schools || []).map(e => `<option${tr.sc === e ? ' selected' : ''}>${esc(e)}</option>`).join('')}</select>
+    <select id="tr-cl" class="mz-filter" aria-label="Class"><option value="all">All classes</option>${(d.classes || []).map(e => `<option${tr.cl === e ? ' selected' : ''}>${esc(e)}</option>`).join('')}</select>
     <select id="tr-en" class="mz-filter" aria-label="Enumerator"><option value="all">All enumerators</option>${d.enums.map(e => `<option${tr.en === e ? ' selected' : ''}>${esc(e)}</option>`).join('')}</select>
     <button class="mz-export" id="tr-exp">⬇ Export CSV</button><span class="mz-count" id="tr-count"></span></div>
   <div class="mz-table-wrap"><div class="mz-scroll"><table class="mz-table" id="tr-table"><thead><tr>
-    ${[['id','Household ID'],['arm','Study group'],['o','Question order'],['st','Status'],['att','Attempts'],['e','Enumerator'],['last','Last visit'],['min','Interview (min)']].map(([k, l]) => `<th data-k="${k}" class="${['att','o','min'].includes(k) ? 'num' : ''}">${l} <span class="arrow"></span></th>`).join('')}
+    ${[['id','Household ID'],['sc','School'],['cl','Class'],['arm','Study group'],['o','Question order'],['st','Status'],['att','Attempts'],['e','Enumerator'],['last','Last visit'],['min','Interview (min)']].map(([k, l]) => `<th data-k="${k}" class="${['att','o','min'].includes(k) ? 'num' : ''}">${l} <span class="arrow"></span></th>`).join('')}
   </tr></thead><tbody id="tr-body"></tbody></table></div></div>`;
 }
 function trRows(d){
   const q = tr.q.trim();
-  let rows = d.rows.filter(r => (!q || String(r.id).includes(q)) && (tr.st === 'all' || r.st === tr.st) && (tr.arm === 'all' || String(r.arm) === tr.arm) && (tr.en === 'all' || r.e === tr.en));
+  let rows = d.rows.filter(r => (!q || String(r.id).includes(q)) && (tr.st === 'all' || r.st === tr.st) && (tr.arm === 'all' || String(r.arm) === tr.arm) && (tr.en === 'all' || r.e === tr.en) && (tr.sc === 'all' || r.sc === tr.sc) && (tr.cl === 'all' || r.cl === tr.cl));
   rows.sort((a, b) => { const x = a[tr.key], y = b[tr.key]; return (typeof x === 'string' ? String(x).localeCompare(y) : ((x == null ? -1 : x) - (y == null ? -1 : y))) * tr.dir || a.id - b.id; });
   return rows;
 }
 function drawTracker(d){
   const rows = trRows(d);
-  $('tr-body').innerHTML = rows.length ? rows.map(r => `<tr><td class="left mz-strong">${r.id}</td><td class="left">${esc(d.arms[r.arm] || '—')}</td><td class="num">${r.o || '—'}</td><td class="left">${badge(r.st)}</td><td class="num">${r.att}</td><td class="left"><span class="mz-tag">${esc(r.e)}</span></td><td class="left">${esc(r.last)}</td><td class="num">${r.min == null ? '—' : r.min}</td></tr>`).join('')
-    : `<tr><td colspan="8" class="mz-empty">No households match the current filters.</td></tr>`;
+  $('tr-body').innerHTML = rows.length ? rows.map(r => `<tr><td class="left mz-strong">${r.id}</td><td class="left">${esc(r.sc || '—')}</td><td class="left">${esc((r.cl || '—').replace(/^.* · /, ''))}</td><td class="left">${esc(d.arms[r.arm] || '—')}</td><td class="num">${r.o || '—'}</td><td class="left">${badge(r.st)}</td><td class="num">${r.att}</td><td class="left"><span class="mz-tag">${esc(r.e)}</span></td><td class="left">${esc(r.last)}</td><td class="num">${r.min == null ? '—' : r.min}</td></tr>`).join('')
+    : `<tr><td colspan="10" class="mz-empty">No households match the current filters.</td></tr>`;
   $('tr-count').textContent = rows.length.toLocaleString() + ' of ' + d.rows.length.toLocaleString() + ' households';
   document.querySelectorAll('#tr-table th').forEach(th => { const a = th.querySelector('.arrow'); a.textContent = th.dataset.k === tr.key ? (tr.dir === 1 ? '▲' : '▼') : ''; });
 }
@@ -991,10 +1007,12 @@ function bindTracker(d){
   $('tr-st').onchange = e => { tr.st = e.target.value; upd(); };
   $('tr-arm').onchange = e => { tr.arm = e.target.value; upd(); };
   $('tr-en').onchange = e => { tr.en = e.target.value; upd(); };
+  $('tr-sc').onchange = e => { tr.sc = e.target.value; upd(); };
+  $('tr-cl').onchange = e => { tr.cl = e.target.value; upd(); };
   document.querySelectorAll('#tr-table th').forEach(th => th.onclick = () => { const k = th.dataset.k; if (tr.key === k) tr.dir *= -1; else { tr.key = k; tr.dir = 1; } upd(); });
   $('tr-exp').onclick = () => {
     const rows = trRows(d);
-    downloadCSV('air-quality_households_' + new Date().toISOString().slice(0, 10), {head:['Household ID','Study group','Question order','Status','Attempts','Enumerator','Last visit','Interview (min)'], rows:rows.map(r => [r.id, d.arms[r.arm] || '', r.o, r.st, r.att, r.e, r.last, r.min == null ? '' : r.min])});
+    downloadCSV('air-quality_households_' + new Date().toISOString().slice(0, 10), {head:['Household ID','School','Class','Study group','Question order','Status','Attempts','Enumerator','Last visit','Interview (min)'], rows:rows.map(r => [r.id, r.sc || '', r.cl || '', d.arms[r.arm] || '', r.o, r.st, r.att, r.e, r.last, r.min == null ? '' : r.min])});
   };
   upd();
 }
@@ -1004,7 +1022,9 @@ function segBarHTML(){
   DATA.segments.forEach(s => { (groups[s.group] = groups[s.group] || []).push(s); });
   const cur = DATA.segments.find(s => s.key === SEG);
   return `<div class="seg-bar" id="segBar" role="group" aria-label="Segment filter"><span class="seg-title">Show results for</span>` +
-    Object.entries(groups).map(([g, list]) => `<div class="seg-group">${g === 'All' ? '' : `<span class="seg-group-label">${esc(g)}</span>`}${list.map(s => `<button class="seg-chip${s.key === SEG ? ' on' : ''}" data-seg="${s.key}"${s.ok ? '' : ` disabled title="Fewer than ${DATA.meta.min_cell} respondents"`}>${esc(s.label)}</button>`).join('')}</div>`).join('') +
+    Object.entries(groups).map(([g, list]) => list.length > 5
+      ? `<div class="seg-group"><span class="seg-group-label">${esc(g)}</span><select class="seg-select${list.some(s => s.key === SEG) ? ' on' : ''}" data-segsel aria-label="${esc(g)}"><option value="all">All ${esc(g.toLowerCase())}s</option>${list.map(s => `<option value="${s.key}"${s.key === SEG ? ' selected' : ''}${s.ok ? '' : ' disabled'}>${esc(s.label)}</option>`).join('')}</select></div>`
+      : `<div class="seg-group">${g === 'All' ? '' : `<span class="seg-group-label">${esc(g)}</span>`}${list.map(s => `<button class="seg-chip${s.key === SEG ? ' on' : ''}" data-seg="${s.key}"${s.ok ? '' : ` disabled title="Fewer than ${DATA.meta.min_cell} respondents"`}>${esc(s.label)}</button>`).join('')}</div>`).join('') +
     `<span class="seg-n">${cur ? 'n = ' + cur.n.toLocaleString() : ''}</span></div>`;
 }
 
@@ -1033,6 +1053,7 @@ function renderPanel(id){
     (empty ? `<div class="chart-card"><div class="empty">No completed interviews yet.<br>This section fills in as soon as the first interviews are submitted and the dashboard is refreshed.</div></div>`
            : p.blocks.map(blockHTML).join(''));
   el.querySelectorAll('[data-seg]').forEach(b => b.onclick = () => setSeg(b.dataset.seg));
+  el.querySelectorAll('[data-segsel]').forEach(sel => sel.onchange = () => setSeg(sel.value));
   if (!empty){
     p.blocks.forEach(b => {
       if (b.t === 'grid') b.cards.forEach(c => { drawCard(c); bindCard(c); });

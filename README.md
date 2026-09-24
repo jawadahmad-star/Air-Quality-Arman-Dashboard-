@@ -45,6 +45,18 @@ pip install pandas numpy openpyxl cryptography pyreadstat
 copy dashboard.config.example.json dashboard.config.json   (then set the password)
 ```
 
+## Study design the dashboard follows
+
+Government schools → classes 4, 5 and 6 → the parents of each class (about 1,200–1,300 households in about 30 classes across 8–10 schools).
+Parents are phoned from the school list and visited by appointment. A classroom gets a purifier only if at least **30% of that class's own parents**
+end up contributing (random price at or below their bid; parents not interviewed do not count). The **Classrooms** tab applies that rule class by class.
+
+### Sampling frame (prefill) columns
+
+`prefill_data.xlsx` should carry, besides `hh_id`, `order_key`, `ap_lm_arm`: **`school`**, **`grade`** (4/5/6), optional **`section`** (A/B) and **`class_size`**.
+The dashboard uses them to build classes and targets. If they are missing it falls back to the `school_child` and `grade_child` text typed by enumerators,
+which is fragile (spelling differences split one class in two), so adding them to the frame is strongly recommended.
+
 ## Hosting
 
 GitHub Pages, branch `main`, folder `/ (root)`, custom domain `airqualityproject.rs.org.pk`, Enforce HTTPS.

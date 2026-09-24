@@ -10,5 +10,7 @@
   "field_hours": [7, 21],
   "anonymise_enumerators": true,
   "prefer": "dta",
-  "small_cell_min": 5
+  "small_cell_min": 5,
+  "class_threshold": 0.30,
+  "use_revised_bid_for_draw": true
 }
