@@ -11,5 +11,8 @@
   "anonymise_enumerators": true,
   "prefer": "dta",
   "small_cell_min": 5,
-  "class_threshold": 0.30
+  "class_threshold": 0.30,
+  "dk_question_threshold_pct": 5.0,
+  "dk_record_min_count": 4,
+  "dk_sentinel_values": [999, 9999, -999, 998, 8888]
 }

@@ -80,6 +80,11 @@ CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.30))
 # it blank; a completed record is flagged when this many of its don't-know-eligible answers land there.
 DK_Q_THRESHOLD = float(CFG.get("dk_question_threshold_pct", 5.0))
 DK_RECORD_MIN = int(CFG.get("dk_record_min_count", 4))
+# standard South Asian field convention: a respondent (or enumerator, to satisfy a "required" constraint)
+# types a round, implausible number into an otherwise-numeric field instead of a formal Don't-Know option.
+# 999 is the classic one (client comment, Sep 2026: 35/36 "grade_exam" answers were literal "999"); the
+# others are the common siblings checked for in the same pass. Extend this list, don't hardcode a new one.
+DK_SENTINEL_VALUES = set(CFG.get("dk_sentinel_values", [999, 9999, -999, 998, 8888]))
 
 # columns that identify a person, a household or a device: dropped on load
 PII_EXACT = {"fname", "lname", "address", "phone_mobile", "phone_landline", "mobile_number", "name_child",
@@ -659,11 +664,14 @@ def top2(s, codes):
 # ====================================================================== don't-know / non-response checks
 # Client comment (Sep 2026): flag a question when Don't Know / Refused / non-response runs high among
 # the people it was actually asked of, and flag a whole interview when several of its answers land there.
-# Every question below is one that the instrument itself gives a DK/Refused/Not-sure option to (via
-# DK_CODES, read off the choices sheet - see above); questions with no such option are not in scope for
-# this check, since a plain "no option to say I don't know" question can't be read as non-response.
-# Two of these are only relevant to a subset of respondents (sickness_air, more_pay) - relevance is
-# evaluated the same way the form does, so a skip-pattern "not applicable" case never counts as DK/NR.
+# Two sources feed this, both read from the instrument rather than hard-coded:
+#   1. DK_QUESTIONS - select_one/select_multiple questions where the instrument itself gives a DK/Refused/
+#      Not-sure option (via DK_CODES, read off the choices sheet - see above).
+#   2. SENTINEL_QUESTIONS (further down) - required text/integer/decimal questions with NO such option,
+#      where a respondent can only signal "don't know" by typing an implausible/sentinel number (e.g. 999)
+#      into an otherwise-numeric field. Added Sep 2026 after grade_exam turned up 97% literal "999".
+# Two of the DK_QUESTIONS below are only relevant to a subset of respondents (sickness_air, more_pay) -
+# relevance is evaluated the same way the form does, so a skip-pattern "not applicable" case never counts.
 def _rel_all(df):
     return pd.Series(True, index=df.index)
 
@@ -703,9 +711,30 @@ DK_LABEL_OVERRIDE = {
     "tp_check": "Time-preference consistency check (Rs 2,000 today vs. Rs 2,000 in a year)",
 }
 
+# Free-text/integer/decimal "required" questions that carry no formal DK/Refused choice option at all, so
+# the DK_CODES scan above never sees them - a respondent (or an enumerator satisfying SurveyCTO's
+# required=yes) can only signal "don't know" here by typing a sentinel value or leaving a value that's
+# implausible for the question. Found by systematically scanning every text/integer/decimal question in the
+# survey sheet that is required=yes and has no DK_CODES list (~50 of them: age, hh_income, hh_member,
+# time_reach, grade_child, the WTP/classroom-logistics fields, etc.) against the real pilot data for
+# round-number heaping (client comment, Sep 2026: "grade_exam" was 35/36 = 97% literal "999"). Everything
+# else checked came back clean - re-run this scan against each fresh data drop and add anything new here;
+# do not hardcode "999" anywhere else in the script, it lives in DK_SENTINEL_VALUES above.
+SENTINEL_QUESTIONS = [
+    # (column, plausible (lo, hi) range for a genuine answer, relevance fn)
+    ("grade_exam", (0, 100), _rel_all),
+]
+
+
+def _numeric_val(s):
+    ex = s.astype(str).str.extract(r"(-?\d+(?:\.\d+)?)")[0]
+    return pd.to_numeric(ex, errors="coerce")
+
+
+_dk_cols = [q[0] for q in DK_QUESTIONS] + [q[0] for q in SENTINEL_QUESTIONS if q[0] in C]
 dk_q_rows = []
-_dk_flag = pd.DataFrame(False, index=C.index, columns=[q[0] for q in DK_QUESTIONS])
-_dk_elig = pd.DataFrame(False, index=C.index, columns=[q[0] for q in DK_QUESTIONS])
+_dk_flag = pd.DataFrame(False, index=C.index, columns=_dk_cols)
+_dk_elig = pd.DataFrame(False, index=C.index, columns=_dk_cols)
 for qname, lst, kind, relfn in DK_QUESTIONS:
     rel = relfn(C).fillna(False)
     codes = DK_CODES[lst]
@@ -727,6 +756,25 @@ for qname, lst, kind, relfn in DK_QUESTIONS:
     if base == 0:
         say(f"  ! DK/NR check: '{qname}' had no relevant respondents - check its relevance rule / column name")
 
+for qname, (lo, hi), relfn in SENTINEL_QUESTIONS:
+    if qname not in C:
+        say(f"  ! DK/NR sentinel check: '{qname}' not found in this data drop - skipped")
+        continue
+    rel = relfn(C).fillna(False)
+    v = _numeric_val(C[qname])
+    is_dk = v.isna() | v.isin(DK_SENTINEL_VALUES) | (v < lo) | (v > hi)
+    is_dk = is_dk & rel
+    _dk_elig[qname] = rel
+    _dk_flag[qname] = is_dk
+    base = int(rel.sum())
+    n_dk = int(is_dk.sum())
+    p_dk = pct(n_dk, base) if base else None
+    dk_q_rows.append({"q": qname, "label": DK_LABEL_OVERRIDE.get(qname, QLAB.get(qname, qname)),
+                      "list": f"sentinel ({lo}-{hi} plausible)", "base": base, "n": n_dk, "p": p_dk,
+                      "flag": bool(base and p_dk is not None and p_dk > DK_Q_THRESHOLD)})
+    if base == 0:
+        say(f"  ! DK/NR sentinel check: '{qname}' had no relevant respondents - check its relevance rule / column name")
+
 n_dk_q_total = len(dk_q_rows)
 n_dk_q_flagged = sum(1 for r in dk_q_rows if r["flag"])
 dk_q_flagged_labels = [r["label"] for r in dk_q_rows if r["flag"]]
@@ -745,7 +793,7 @@ say(f"DK/NR checks : {n_dk_q_flagged} of {n_dk_q_total} questions above {DK_Q_TH
 
 # table card shared by Overview (client-visible) and Field Operations (internal): one row per DK-eligible question
 _dk_pill = lambda flagged: {"v": 1 if flagged else 0, "t": "Verify" if flagged else "OK", "tone": "amber" if flagged else "good"}
-dk_table = {"cols": [{"k": "label", "l": "Question"}, {"k": "list", "l": "Choice list"}, {"k": "base", "l": "Asked", "num": True},
+dk_table = {"cols": [{"k": "label", "l": "Question"}, {"k": "list", "l": "Choice list / detection"}, {"k": "base", "l": "Asked", "num": True},
                      {"k": "n", "l": "DK / Refused / Blank", "num": True}, {"k": "p", "l": "Share", "num": True}, {"k": "flag", "l": "Status", "verdict": True}],
             "rows": [{"label": r["label"], "list": r["list"], "base": r["base"], "n": r["n"],
                       "p": {"v": r["p"] if r["p"] is not None else 0, "t": "—" if r["p"] is None else f"{r['p']:.1f}%"},
