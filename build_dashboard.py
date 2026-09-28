@@ -118,8 +118,12 @@ def load_file(path):
 
 
 def _make_key(df):
-    if "KEY" in df and (df["KEY"] != "").any():
-        return df["KEY"]
+    # SurveyCTO's CSV export names this column "KEY"; Stata lowercases variable
+    # names on import/export, so the .dta carries it as "key" - match case-
+    # insensitively or the CSV and DTA rows for the same submission never join.
+    kcol = next((c for c in df.columns if c.upper() == "KEY"), None)
+    if kcol and (df[kcol] != "").any():
+        return df[kcol]
     g = lambda c: df[c] if c in df else pd.Series("", index=df.index)
     return g("hh_id") + "|" + g("starttime") + "|" + g("enum_name")
 
