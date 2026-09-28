@@ -25,6 +25,7 @@ PRIVACY
 Requires: pandas, numpy, openpyxl, cryptography  (pyreadstat optional, for .dta)
 """
 import base64
+import difflib
 import json
 import math
 import os
@@ -306,6 +307,41 @@ D = D.copy()
 _short = lambda x: re.sub(r"^(govt\.?|government)\s+", "", str(x).strip(), flags=re.I)
 
 
+def _norm_school_names(series):
+    """Collapse free-typed school names that are the same school spelled/cased differently
+    (e.g. "Dharampura campus" / "Dharumpura campus" / "Governmeny boys school dhrampura")
+    into one canonical label, without assuming how many distinct schools there are."""
+    s = series.astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+    s = s.where(s != "", np.nan)
+    freq = s.dropna().value_counts()
+    if freq.empty:
+        return s
+
+    def _core(x):
+        x = x.lower()
+        x = re.sub(r"\bgovernment\b|\bgovernmeny\b|\bgovt\.?\b", " ", x)
+        x = re.sub(r"\bboys?\b|\bgirls?\b|\bschool\b|\bcampus\b", " ", x)
+        return re.sub(r"[^a-z]", "", x)
+
+    clusters = []
+    for val in freq.index:
+        core = _core(val)
+        hit = next((c for c in clusters if difflib.SequenceMatcher(None, core, c["core"]).ratio() >= 0.72), None)
+        if hit is None:
+            hit = {"core": core, "members": []}
+            clusters.append(hit)
+        hit["members"].append(val)
+
+    label_of = {}
+    for c in clusters:
+        members = c["members"]
+        proper = [m for m in members if re.fullmatch(r"[A-Z][a-z]+(?: [A-Z][a-z]+)*", m)]
+        canon = max(proper, key=lambda m: freq[m]) if proper else max(members, key=lambda m: freq[m])
+        for m in members:
+            label_of[m] = canon
+    return s.map(label_of)
+
+
 def _grade_of(t):
     m = re.search(r"\d+", str(t)); return float(m.group()) if m else np.nan
 
@@ -323,7 +359,7 @@ def _cls_label(ck):
     return f"{_short(sch)} · Class {gr}" + (f"-{sec}" if sec else "")
 
 
-_txt_sch = (D["school_child"] if "school_child" in D else pd.Series("", index=D.index)).astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+_txt_sch = _norm_school_names(D["school_child"] if "school_child" in D else pd.Series("", index=D.index))
 _txt_gr = D["grade_child"] if "grade_child" in D else pd.Series("", index=D.index)
 D["_sch"] = _txt_sch.where(_txt_sch != "", np.nan)
 D["_gradeN"] = _txt_gr.map(_grade_of)
