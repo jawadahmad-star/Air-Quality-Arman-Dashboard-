@@ -75,6 +75,11 @@ MIN_CELL = int(CFG.get("small_cell_min", 5))
 PREFER = CFG.get("prefer", "dta")
 ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.30))
+# don't-know / non-response flags (client comment, Sep 2026): a question is flagged when more than
+# this share of the respondents it was actually asked answer Don't Know / Refused / Not sure or leave
+# it blank; a completed record is flagged when this many of its don't-know-eligible answers land there.
+DK_Q_THRESHOLD = float(CFG.get("dk_question_threshold_pct", 5.0))
+DK_RECORD_MIN = int(CFG.get("dk_record_min_count", 4))
 
 # columns that identify a person, a household or a device: dropped on load
 PII_EXACT = {"fname", "lname", "address", "phone_mobile", "phone_landline", "mobile_number", "name_child",
@@ -239,6 +244,23 @@ SHORT = {
 }
 for (ln, v), lab in SHORT.items():
     CH[ln] = [(vv, lab if vv == v else ll) for vv, ll in CH.get(ln, [])]
+
+# ---- Don't Know / Refused / Not sure codes, read off each choice list's own labels (never hard-coded -
+# the instrument uses 99 on most lists, 98 on some, 7 on "reason", 0 elsewhere - checked systematically
+# against the choices sheet rather than assumed). "Not applicable" is a substantive answer, not excluded here.
+_DK_LABEL_RE = re.compile(r"don.?t\s*know|refus", re.I)
+DK_CODES = {ln: {v for v, l in pairs if _DK_LABEL_RE.search(l)} for ln, pairs in CH.items()}
+DK_CODES = {ln: codes for ln, codes in DK_CODES.items() if codes}
+
+# ---- question label lookup (from the survey sheet, for the DK/non-response breakdown table)
+_sv = pd.read_excel(form_path, sheet_name="survey").fillna("")
+_sv_lab = "label: eng" if "label: eng" in _sv.columns else next(c for c in _sv.columns if str(c).startswith("label"))
+QLAB = {}
+for _, _r in _sv.iterrows():
+    _nm = str(_r["name"]).strip()
+    if _nm:
+        _lab = re.sub(r"\s+", " ", str(_r[_sv_lab]).replace("\xa0", " ")).strip()
+        QLAB[_nm] = (_lab[:87] + "…") if len(_lab) > 88 else _lab
 
 
 def lab_of(ln, code):
@@ -634,6 +656,104 @@ def top2(s, codes):
     return pct(int(s.isin(codes).sum()), len(s)) if len(s) else None
 
 
+# ====================================================================== don't-know / non-response checks
+# Client comment (Sep 2026): flag a question when Don't Know / Refused / non-response runs high among
+# the people it was actually asked of, and flag a whole interview when several of its answers land there.
+# Every question below is one that the instrument itself gives a DK/Refused/Not-sure option to (via
+# DK_CODES, read off the choices sheet - see above); questions with no such option are not in scope for
+# this check, since a plain "no option to say I don't know" question can't be read as non-response.
+# Two of these are only relevant to a subset of respondents (sickness_air, more_pay) - relevance is
+# evaluated the same way the form does, so a skip-pattern "not applicable" case never counts as DK/NR.
+def _rel_all(df):
+    return pd.Series(True, index=df.index)
+
+
+def _rel_sickness_air(df):
+    codes = [v for v, _ in CH.get("long_term_med", [])]
+    toks, _ = _tokens(df, "long_term_medical", codes)
+    return ~toks.map(lambda t: 7 in t)                       # asked unless "None of the above" was ticked
+
+
+def _rel_more_pay(df):
+    return (num(df, "contribute_will") != 2000) & (num(df, "change_pay") == 2)
+
+
+DK_QUESTIONS = [
+    # (column, choice list, "one"/"multi", relevance fn matching the form's own skip logic)
+    ("sickness_air", "yesno_dk", "one", _rel_sickness_air),
+    ("beleifs_air_pollute", "belief_air", "multi", _rel_all),
+    ("check_air_quality", "check_air", "one", _rel_all),
+    ("pollute_believe", "belief", "one", _rel_all),
+    ("risk_air_child", "disease_risk", "one", _rel_all),
+    ("measure_air_pollution", "measures", "multi", _rel_all),
+    ("actions_protect_c", "measures", "multi", _rel_all),
+    ("more_pay", "reason", "one", _rel_more_pay),
+    ("certain_choice", "choice", "one", _rel_all),
+    ("tp1", "timeopt", "one", _rel_all),
+    ("tp2", "timeopt", "one", _rel_all),
+    ("tp3", "timeopt", "one", _rel_all),
+    ("tp_check", "timeopt", "one", _rel_all),
+]
+DK_QUESTIONS = [q for q in DK_QUESTIONS if q[1] in DK_CODES]
+# tp1/tp2/tp3/tp_check share one templated label (the amount is a calculated field) - tell them apart here
+DK_LABEL_OVERRIDE = {
+    "tp1": "Time-preference bisection - step 1 (Rs 2,000 today vs. more in a year)",
+    "tp2": "Time-preference bisection - step 2",
+    "tp3": "Time-preference bisection - step 3",
+    "tp_check": "Time-preference consistency check (Rs 2,000 today vs. Rs 2,000 in a year)",
+}
+
+dk_q_rows = []
+_dk_flag = pd.DataFrame(False, index=C.index, columns=[q[0] for q in DK_QUESTIONS])
+_dk_elig = pd.DataFrame(False, index=C.index, columns=[q[0] for q in DK_QUESTIONS])
+for qname, lst, kind, relfn in DK_QUESTIONS:
+    rel = relfn(C).fillna(False)
+    codes = DK_CODES[lst]
+    if kind == "one":
+        v = num(C, qname)
+        is_dk = v.isin(codes) | v.isna()
+    else:
+        _codes_all = [c for c, _ in CH.get(lst, [])]
+        toks, _ = _tokens(C, qname, _codes_all)
+        is_dk = toks.map(lambda t: bool(t & codes) or len(t) == 0)
+    is_dk = is_dk & rel
+    _dk_elig[qname] = rel
+    _dk_flag[qname] = is_dk
+    base = int(rel.sum())
+    n_dk = int(is_dk.sum())
+    p_dk = pct(n_dk, base) if base else None
+    dk_q_rows.append({"q": qname, "label": DK_LABEL_OVERRIDE.get(qname, QLAB.get(qname, qname)), "list": lst, "base": base, "n": n_dk, "p": p_dk,
+                      "flag": bool(base and p_dk is not None and p_dk > DK_Q_THRESHOLD)})
+    if base == 0:
+        say(f"  ! DK/NR check: '{qname}' had no relevant respondents - check its relevance rule / column name")
+
+n_dk_q_total = len(dk_q_rows)
+n_dk_q_flagged = sum(1 for r in dk_q_rows if r["flag"])
+dk_q_flagged_labels = [r["label"] for r in dk_q_rows if r["flag"]]
+
+# record-level: how many of the DK-eligible questions asked of this respondent came back DK/Refused/blank.
+# Threshold (DK_RECORD_MIN, default 4 of up to 13 eligible items = roughly a third): an isolated "don't
+# know" on one or two items is normal survey noise; a respondent unable or unwilling to substantively
+# answer several of the knowledge/opinion items in a row is worth the field team looking again at
+# comprehension, rapport, or possible rushing - not a claim that anything was fabricated.
+C["_dk_elig_n"] = _dk_elig.sum(axis=1)
+C["_dk_n"] = _dk_flag.sum(axis=1)
+C["_dk_share"] = np.where(C["_dk_elig_n"] > 0, 100.0 * C["_dk_n"] / C["_dk_elig_n"], 0.0)
+n_dk_records = int((C["_dk_n"] >= DK_RECORD_MIN).sum())
+say(f"DK/NR checks : {n_dk_q_flagged} of {n_dk_q_total} questions above {DK_Q_THRESHOLD:.0f}% DK/Refused/blank; "
+    f"{n_dk_records} of {N_C} completed record(s) with {DK_RECORD_MIN}+ such answers")
+
+# table card shared by Overview (client-visible) and Field Operations (internal): one row per DK-eligible question
+_dk_pill = lambda flagged: {"v": 1 if flagged else 0, "t": "Verify" if flagged else "OK", "tone": "amber" if flagged else "good"}
+dk_table = {"cols": [{"k": "label", "l": "Question"}, {"k": "list", "l": "Choice list"}, {"k": "base", "l": "Asked", "num": True},
+                     {"k": "n", "l": "DK / Refused / Blank", "num": True}, {"k": "p", "l": "Share", "num": True}, {"k": "flag", "l": "Status", "verdict": True}],
+            "rows": [{"label": r["label"], "list": r["list"], "base": r["base"], "n": r["n"],
+                      "p": {"v": r["p"] if r["p"] is not None else 0, "t": "—" if r["p"] is None else f"{r['p']:.1f}%"},
+                      "flag": _dk_pill(r["flag"])} for r in dk_q_rows],
+            "read": (f"<strong>{n_dk_q_flagged}</strong> of {n_dk_q_total} questions are above the {DK_Q_THRESHOLD:.0f}% line, counted among the respondents each question was actually asked of."
+                     + (f" Flagged: {', '.join(dk_q_flagged_labels[:4])}{'…' if len(dk_q_flagged_labels) > 4 else ''}." if dk_q_flagged_labels else " None are above the line yet."))}
+
+
 # ====================================================================== PANEL 1 - OVERVIEW
 PANELS = []
 a = D.copy()
@@ -812,12 +932,18 @@ ov_kpis = [
     K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"30% of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
     K("🚪", fmt_n(N_ATT), "Fieldwork Attempts", f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
+    K("❓", n_dk_q_flagged, "Questions With High Don't-Know / Non-response",
+      f"{n_dk_q_flagged} of {n_dk_q_total} asked questions over {DK_Q_THRESHOLD:.0f}% DK/Refused/blank" if N_C else "No completed interviews yet",
+      "down" if n_dk_q_flagged else "up", "amber" if n_dk_q_flagged else "green"),
 ]
 ov_callouts = [
     {"cls": "navy", "icon": "⚪", "h": "Control — no video", "p": f"{arm_done[0]} of {arm_target[0]} completed ({pct(arm_done[0], arm_target[0], 0):.0f}%)."},
     {"cls": "teal", "icon": "🎬", "h": "Video 1 — information film", "p": f"{arm_done[1]} of {arm_target[1]} completed ({pct(arm_done[1], arm_target[1], 0):.0f}%)."},
     {"cls": "purple", "icon": "🎞️", "h": "Video 2 — information film", "p": f"{arm_done[2]} of {arm_target[2]} completed ({pct(arm_done[2], arm_target[2], 0):.0f}%)."},
     {"cls": "amber", "icon": "📉", "h": "Non-response", "p": f"{n_refused} refusals and {n_notreached} not reached out of {N_ATT} attempts ({pct(n_refused + n_notreached, N_ATT, 0):.0f}%)."},
+    {"cls": "amber" if n_dk_q_flagged or n_dk_records else "teal", "icon": "❓", "h": "Don't know / non-response",
+     "p": (f"{n_dk_q_flagged} of {n_dk_q_total} questions over {DK_Q_THRESHOLD:.0f}% Don't-Know/Refused/blank among respondents asked; "
+           f"{n_dk_records} interview(s) with {DK_RECORD_MIN}+ such answers are listed to verify under Field Operations.") if N_C else "No completed interviews yet."},
 ]
 
 # ---- key findings (auto-written from the data)
@@ -863,6 +989,10 @@ overview = {
         {"t": "grid", "cols": 2, "cards": [
             card("funnel", "ovFunnel", "From Attempt to Analysed Interview", "How many attempts survive each stage", {"rows": funnel}),
             card("blocks", "ovBlocks", "Progress by School", "Completed interviews against the parents listed in each school's classes", {"rows": school_blocks})]},
+        {"t": "grid", "cols": 1, "cards": [
+            card("table", "ovDkQ", "Don't-Know / Non-response, by Question",
+                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of (skip-pattern cases excluded) who landed there or left it blank. Flagged above {DK_Q_THRESHOLD:.0f}%.",
+                 dk_table, opt={"sortKey": "p"}, full=True)]},
         {"t": "note", "html": f"Sampling frame: <strong>{N_TARGET:,}</strong> households in <strong>{n_cls}</strong> classes, pre-assigned to study arm and question order (Control = {arm_target[0]}, Video 1 = {arm_target[1]}, Video 2 = {arm_target[2]}). "
                              "Completed = <code>status_survey</code> is “Completed”, counted once per household. Research Solutions (M&amp;A Research Solutions LLC) | www.rs.org.pk"},
     ]}
@@ -1006,6 +1136,9 @@ if frame is not None:
 qa("Completed but no bid", "Completed interviews with no willingness-to-pay amount", int(C["_bid"].isna().sum()), N_C)
 qa("Implausible income", "Monthly household income under Rs 5,000 or over Rs 1,000,000", int(((C["_income"] < 5000) | (C["_income"] > 1_000_000)).sum()), N_C)
 qa("Class size entered inconsistently", "Classes where interviews report different class sizes", sum(r["incons"] for r in class_rows), n_cls)
+qa("Many don't-know / non-response answers",
+   f"Completed interviews where {DK_RECORD_MIN} or more of the {n_dk_q_total} don't-know-eligible questions came back Don't Know, Refused, or blank",
+   n_dk_records, N_C)
 n_flag_total = sum(r["n"] for r in qa_rows)
 
 # ---- enumerator scorecard
@@ -1056,6 +1189,7 @@ ops_ins = [
     {"cls": "teal", "html": f"<strong>Pace:</strong> the team averages <strong>{per_day:.1f}</strong> completed interviews per field day. At that rate the remaining <strong>{remaining:,}</strong> households need roughly <strong>{days_left}</strong> more field days" + (f", finishing around <strong>{fdate(proj_finish)}</strong>." if days_left else ".")},
     {"cls": "amber", "html": f"<strong>Conversion:</strong> <strong>{conv:.0f}%</strong> of attempts end in a completed interview, about <strong>{(N_ATT / N_C):.1f}</strong> attempts per completed case. " + ("Non-response, not enumerator output, is the constraint on the field plan." if conv < 70 else "Contact is efficient; the field plan is limited by pace, not access.") if N_C else "No completed interviews yet."},
 ]
+
 PANELS.append({
     "id": "ops", "tab": "🛠️ Field Operations", "eyebrow": "Section 02", "title": "Field Operations & Data Quality",
     "blurb": "How the sample is accumulating against a linear pace, how output and interview length vary across the team, and which records the automated checks ask the field team to verify.",
@@ -1067,6 +1201,10 @@ PANELS.append({
         {"t": "grid", "cols": 2, "cards": [
             card("calendar", "opsCal", "Field Calendar", "Completed interviews per day: darker cells are busier days; grey cells are days with no visits", cal),
             card("qa", "opsQa", "Records to Verify", "Automated checks: a flag asks the team to look again, it does not mean the record is wrong", {"rows": qa_rows})]},
+        {"t": "grid", "cols": 1, "cards": [
+            card("table", "opsDkQ", "Don't-Know / Non-response by Question",
+                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of who landed there or left it blank. Flag line: {DK_Q_THRESHOLD:.0f}%.",
+                 dk_table, opt={"sortKey": "p"}, full=True)]},
         {"t": "grid", "cols": 1, "cards": [card("table", "opsEnum", "Enumerator Scorecard", "Attempts, conversion, interview length and bid pattern by field team member. Click a column to sort.",
                                                 {"cols": [{"k": "e", "l": "Enumerator"}, {"k": "att", "l": "Attempts", "num": True}, {"k": "cmp", "l": "Completed", "num": True},
                                                           {"k": "conv", "l": "Conversion", "num": True}, {"k": "med", "l": "Median min", "num": True},
@@ -1078,7 +1216,7 @@ PANELS.append({
             card("hbar", "opsEnum2", "Output by Enumerator", "Completed interviews per field team member", enum_bar, opt={"color": 1, "fmt": "n"})]},
         {"t": "grid", "cols": 1, "cards": [card("recon", "opsRecon", "Data Source Check", "How the CSV and Stata exports compare before they are combined", recon_card)]},
         {"t": "insights", "d": ops_ins, "row": True},
-        {"t": "note", "html": "Enumerators are shown by staff code. Duration is start to submission. Checks are prompts for verification, never findings of misconduct. The projected finish extrapolates the average daily completion rate and skips Sundays."},
+        {"t": "note", "html": "Enumerators are shown by staff code. Duration is start to submission. Checks are prompts for verification, never findings of misconduct. Don't-Know/Refused/blank shares are computed only among respondents each question was actually asked of (skip-pattern cases excluded). The projected finish extrapolates the average daily completion rate and skips Sundays."},
     ]})
 
 # ====================================================================== PANEL 3 - HOUSEHOLDS
