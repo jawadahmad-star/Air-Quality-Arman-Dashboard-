@@ -975,7 +975,7 @@ function trackerHTML(d){
     <select id="tr-en" class="mz-filter" aria-label="Enumerator"><option value="all">All enumerators</option>${d.enums.map(e => `<option${tr.en === e ? ' selected' : ''}>${esc(e)}</option>`).join('')}</select>
     <button class="mz-export" id="tr-exp">⬇ Export CSV</button><span class="mz-count" id="tr-count"></span></div>
   <div class="mz-table-wrap"><div class="mz-scroll"><table class="mz-table" id="tr-table"><thead><tr>
-    ${[['id','Household ID'],['sc','School'],['cl','Class'],['arm','Study group'],['o','Question order'],['st','Status'],['att','Attempts'],['e','Enumerator'],['last','Last visit'],['min','Interview (min)']].map(([k, l]) => `<th data-k="${k}" class="${['att','o','min'].includes(k) ? 'num' : ''}">${l} <span class="arrow"></span></th>`).join('')}
+    ${[['id','Household ID'],['sc','School'],['cl','Class'],['arm','Study group'],['o','Question order'],['st','Status'],['e','Enumerator'],['last','Last visit'],['min','Interview (min)']].map(([k, l]) => `<th data-k="${k}" class="${['o','min'].includes(k) ? 'num' : ''}">${l} <span class="arrow"></span></th>`).join('')}
   </tr></thead><tbody id="tr-body"></tbody></table></div></div>`;
 }
 function trRows(d){
@@ -986,8 +986,8 @@ function trRows(d){
 }
 function drawTracker(d){
   const rows = trRows(d);
-  $('tr-body').innerHTML = rows.length ? rows.map(r => `<tr><td class="left mz-strong">${r.id}</td><td class="left">${esc(r.sc || '—')}</td><td class="left">${esc((r.cl || '—').replace(/^.* · /, ''))}</td><td class="left">${esc(d.arms[r.arm] || '—')}</td><td class="num">${r.o || '—'}</td><td class="left">${badge(r.st)}</td><td class="num">${r.att}</td><td class="left"><span class="mz-tag">${esc(r.e)}</span></td><td class="left">${esc(r.last)}</td><td class="num">${r.min == null ? '—' : r.min}</td></tr>`).join('')
-    : `<tr><td colspan="10" class="mz-empty">No households match the current filters.</td></tr>`;
+  $('tr-body').innerHTML = rows.length ? rows.map(r => `<tr><td class="left mz-strong">${r.id}</td><td class="left">${esc(r.sc || '—')}</td><td class="left">${esc((r.cl || '—').replace(/^.* · /, ''))}</td><td class="left">${esc(d.arms[r.arm] || '—')}</td><td class="num">${r.o || '—'}</td><td class="left">${badge(r.st)}</td><td class="left"><span class="mz-tag">${esc(r.e)}</span></td><td class="left">${esc(r.last)}</td><td class="num">${r.min == null ? '—' : r.min}</td></tr>`).join('')
+    : `<tr><td colspan="9" class="mz-empty">No households match the current filters.</td></tr>`;
   $('tr-count').textContent = rows.length.toLocaleString() + ' of ' + d.rows.length.toLocaleString() + ' households';
   document.querySelectorAll('#tr-table th').forEach(th => { const a = th.querySelector('.arrow'); a.textContent = th.dataset.k === tr.key ? (tr.dir === 1 ? '▲' : '▼') : ''; });
 }
@@ -1002,7 +1002,7 @@ function bindTracker(d){
   document.querySelectorAll('#tr-table th').forEach(th => th.onclick = () => { const k = th.dataset.k; if (tr.key === k) tr.dir *= -1; else { tr.key = k; tr.dir = 1; } upd(); });
   $('tr-exp').onclick = () => {
     const rows = trRows(d);
-    downloadCSV('air-quality_households_' + new Date().toISOString().slice(0, 10), {head:['Household ID','School','Class','Study group','Question order','Status','Attempts','Enumerator','Last visit','Interview (min)'], rows:rows.map(r => [r.id, r.sc || '', r.cl || '', d.arms[r.arm] || '', r.o, r.st, r.att, r.e, r.last, r.min == null ? '' : r.min])});
+    downloadCSV('air-quality_households_' + new Date().toISOString().slice(0, 10), {head:['Household ID','School','Class','Study group','Question order','Status','Enumerator','Last visit','Interview (min)'], rows:rows.map(r => [r.id, r.sc || '', r.cl || '', d.arms[r.arm] || '', r.o, r.st, r.e, r.last, r.min == null ? '' : r.min])});
   };
   upd();
 }
