@@ -12,7 +12,6 @@
   "prefer": "dta",
   "small_cell_min": 5,
   "class_threshold": 0.40,
-  "parents_per_class": 28,
   "raw_download": true,
   "raw_download_include_pii": false,
   "dk_question_threshold_pct": 5.0,

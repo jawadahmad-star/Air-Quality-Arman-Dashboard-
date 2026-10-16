@@ -77,7 +77,6 @@ ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.40))      # overridden below by the rule actually coded in the form
 RAW_INCLUDE_PII = bool(CFG.get("raw_download_include_pii", False))   # raw-data download button: identifiers are stripped unless this is switched on
 RAW_DOWNLOAD = bool(CFG.get("raw_download", True))
-PARENTS_PER_CLASS = int(CFG.get("parents_per_class", 28))           # planning size of a class until interviews report the real one
 # don't-know / non-response flags (client comment, Sep 2026): a question is flagged when more than
 # this share of the respondents it was actually asked answer Don't Know / Refused / Not sure or leave
 # it blank; a completed record is flagged when this many of its don't-know-eligible answers land there.
@@ -353,7 +352,7 @@ if frame is not None and not HAS_FRAME_CLASS:
 # ---------------------------------------------------------------- sampling plan: the selected-schools list
 # One row per school with the number of sections in each class. This is what defines the classes in the study
 # (the prefill file is only an ID pool: hh_id -> arm / question order, with no school information).
-_plan_files = [p for p in sorted((ROOT / "Instrument").rglob("*SelectedSchools*.xlsx"), key=lambda p: p.stat().st_mtime) if not p.name.startswith("~$")]
+_plan_files = []                            # deliberately not used: schools, classes and class sizes are learned from the data as it arrives
 _norm_name = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
 PLAN = {}                                   # (school name as in the form, class) -> number of sections
 if _plan_files:
@@ -636,17 +635,17 @@ def _class_size(ck):
         if len(_fs):
             return int(np.median(_fs))
         return int((frame["_ckey"] == ck).sum())
-    return PARENTS_PER_CLASS
+    return int((KIDC["_ckey"] == ck).sum())              # nothing reported yet: no more than the children seen so far
 
 
-if HAS_PLAN:
+if UNIVERSE and not HAS_FRAME_CLASS:                      # no fixed sample: the target is the parents of the classes seen so far and grows as new classes appear
     N_TARGET_PLAN = sum(_class_size(_ck) for _ck in UNIVERSE)
 elif HAS_FRAME_CLASS:
     N_TARGET_PLAN = len(frame)
 else:
     N_TARGET_PLAN = len(frame) if frame is not None else max(len(C), 1)
 N_TARGET = int(CFG.get("target_override") or N_TARGET_PLAN)
-FRAME_IS_POOL = frame is not None and HAS_PLAN and not HAS_FRAME_CLASS     # prefill = ID pool, not the list of households to visit
+FRAME_IS_POOL = frame is not None and ("enum_school" in D) and not HAS_FRAME_CLASS     # prefill = ID pool, not the list of households to visit
 N_ATT = len(D)
 N_C = len(C)
 say(f"Attempts  : {N_ATT}   completed (analysis base): {N_C}   target: {N_TARGET}")
@@ -1139,7 +1138,7 @@ for _ck in UNIVERSE:
     _hhs = [h for h, c in _hh_class.items() if c == _ck]
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
     _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
-    if HAS_PLAN or HAS_FRAME_CLASS:
+    if len(_sizes) or HAS_FRAME_CLASS:
         _rem = max(_size - _nd - _refused, 0)            # parents of the class with no final outcome yet (refusals can no longer contribute)
     else:
         _rem = sum(1 for x in _states if x in _PENDING)
@@ -1238,7 +1237,7 @@ overview = {
                  {"x": [x["d"] for x in daily], "series": [{"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True}]},
                  opt={"yfmt": "n"}, full=True)]},
         {"t": "grid", "cols": 3, "cards": [
-            card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,} planned (every parent of the {n_cls} classes)" if FRAME_IS_POOL else f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
+            card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,} parents in the {n_cls} classes seen so far" if FRAME_IS_POOL else f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
             card("donut", "ovArm", "Completed by Study Arm", "Control · Video 1 · Video 2",
                  {"items": [{"l": ARM_LAB[v], "n": arm_done[v], "p": pct(arm_done[v], N_C)} for v in (0, 1, 2)], "base": N_C}, opt={"colors": [7, 3, 5], "fmt": "n"}),
             card("hbar", "ovDisp", "Attempt Disposition", "Outcome of every fieldwork attempt recorded so far", {"items": disp, "base": N_ATT}, var="status_survey", opt={"color": 2, "fmt": "n"})]},
@@ -1250,7 +1249,7 @@ overview = {
                  f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of (skip-pattern cases excluded) who landed there or left it blank. Flagged above {DK_Q_THRESHOLD:.0f}%.",
                  dk_table, opt={"sortKey": "p"}, full=True)]},
         {"t": "note", "html": ((f"Sample: <strong>{n_cls}</strong> classes in <strong>{len(cls_schools)}</strong> schools; the parents of each class are interviewed, about <strong>{N_TARGET:,}</strong> interviews in all "
-                                  f"(class sizes are taken from the interviews, and {PARENTS_PER_CLASS} per class is assumed until a class has reported). ") if FRAME_IS_POOL else
+                                  f"(schools, classes and class sizes appear as the interviews report them, so this total grows as new classes start). ") if FRAME_IS_POOL else
                                  (f"Sampling frame: <strong>{N_TARGET:,}</strong> households in <strong>{n_cls}</strong> classes, pre-assigned to study arm and question order (Control = {arm_target[0]}, Video 1 = {arm_target[1]}, Video 2 = {arm_target[2]}). ")) +
                              "Completed = <code>status_survey</code> is “Completed”, counted once per household. Research Solutions (M&amp;A Research Solutions LLC) | www.rs.org.pk"},
     ]}
@@ -1964,7 +1963,7 @@ PANELS.append({
              "Search by household ID, filter by status, arm or enumerator, click a column to sort, or export the current view to CSV.",
     "seg": False, "blocks": [
         {"t": "kpis", "d": tr_kpis},
-        {"t": "blocks", "head": "📐 Progress by assignment block", "d": blocks, "foot": ("Each card is one study arm and question-order combination. Target = an equal share (one sixth) of the planned interviews, since the households are assigned as they are visited; completed = interviews done. This is the quickest check that all six blocks fill evenly." if FRAME_IS_POOL else
+        {"t": "blocks", "head": "📐 Progress by assignment block", "d": blocks, "foot": ("Each card is one study arm and question-order combination. Target = an equal share (one sixth) of the parents in the classes seen so far (it grows as new classes start); completed = interviews done. This is the quickest check that all six blocks fill evenly." if FRAME_IS_POOL else
                                                                                            "Each card is one study arm and question-order combination from the sampling frame. Target = households assigned to the block; completed = interviews done. This is the quickest check that all six blocks fill evenly.")},
         {"t": "tracker", "d": {"rows": tr_rows, "enums": sorted({r["e"] for r in tr_rows if r["e"] != "—"}), "arms": {str(k): v for k, v in ARM_LAB.items()}, "schools": cls_schools, "classes": [r["label"] for r in class_rows]}},
         {"t": "note", "html": "One row per household ID visited. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},

@@ -61,7 +61,7 @@ which is fragile (spelling differences split one class in two), so adding them t
 ## Oct 2026 instrument update
 
 - Rules are read from the XLSForm each build (class rule 40%, bids up to Rs 2,500, top-up per child), so the dashboard follows the form.
-- Classes come from `Instrument/Attachments/AirQuality_SelectedSchools*.xlsx` (schools x sections, grades 4-7) and the form's `enum_school / enum_class / enum_section`. The prefill is only an ID pool (hh_id -> arm, order).
+- Schools, classes and class sizes are learned from the data as it arrives (form's `enum_school / enum_class / enum_section` and the parents-in-class answer); nothing is assumed in advance, and the target grows as new classes appear. The prefill is only an ID pool (hh_id -> arm, order).
 - Children: one record per child (`_1`, `_2` ... repeat columns); each bid counts in that child's own class.
 - **Data tab**: client downloads the field data CSV and a codebook. Identifiers (names, phones, addresses, GPS, device ids) are removed; `raw_download_include_pii` in the local config switches that (keep it false).
 
