@@ -11,17 +11,18 @@ import re
 
 TABS = {  # short labels so all ten tabs fit on a laptop screen
     "overview": "📊 Overview", "profile": "👨‍👩‍👧 Respondents", "child": "🎒 Child & Health",
-    "classes": "🏫 Classrooms", "aware": "🌫️ Awareness", "wtp": "💰 Willing to Pay", "effects": "🧪 Video Effects", "tracker": "📋 Tracker",
+    "classes": "🏫 Classrooms", "aware": "🌫️ Awareness", "wtp": "💰 Willing to Pay", "effects": "🧪 Video Effects", "tracker": "📋 Tracker", "data": "📥 Data",
 }
 SHORT = {  # one line per section for the menu
     "overview": "Progress, study groups and headline findings",
-    "classes": "Which classes reach the 30% rule and get a purifier",
+    "classes": "Which classes reach the @PCT@ rule and get a purifier",
     "profile": "Who was interviewed",
     "child": "School, commute and child health",
     "aware": "What parents know and believe about air pollution",
     "wtp": "How much parents would pay for a classroom purifier",
     "effects": "Did the videos change what parents say?",
     "tracker": "The status of every household",
+    "data": "Download the field data (CSV) and its codebook",
 }
 PANEL_TITLE = {"effects": "Did the Videos Make a Difference?"}
 
@@ -42,7 +43,7 @@ HELP = {
     "bid": {
         "read": "Each parent named the most they would contribute towards an air purifier for their child's classroom. A random price is then drawn: "
                 "if the bid is at least as high they pay the random price, otherwise nothing. That makes the honest bid the best bid. Each bar counts parents whose bid fell in that band.",
-        "care": "The tall bar at Rs 2,000 is the maximum allowed: some parents would have paid more.",
+        "care": "The tall bar at Rs @CAP@ is the maximum allowed: some parents would have paid more.",
     },
     "cum": {
         "read": "The green line is the number of completed interviews so far. The dashed line continues it at the average pace to date. The red dashed line is the target. "
@@ -55,13 +56,13 @@ HELP = {
         "care": "Guesses are opinions, not facts.",
     },
     "classrule": {
-        "read": "A purifier is installed in a class only if at least 30% of that class's parents end up contributing. Each parent's contribution is decided by a random price drawn against their own bid: "
+        "read": "A purifier is installed in a class only if at least @PCT@ of that class's parents end up contributing. Each parent's contribution is decided by a random price drawn against their own bid: "
                 "if the random price is at or below the bid, the parent contributes it. For a class of 30 parents, 9 contributors are enough. Parents who have not been interviewed (or cannot be reached) count as not contributing.",
         "care": "Because prices are drawn at random, two classes with the same average bid can end up on different sides of the line. A class is only final once every parent has been interviewed.",
     },
     "chance": {
-        "read": "“Chance of reaching 30%” looks at the parents still to be interviewed. It assumes each of them contributes with the same probability as the class average so far, "
-                "and adds up how likely it is that enough of them will contribute to bring the class to 30%. Above 50% is “On track”; below is “At risk”.",
+        "read": "“Chance of reaching @PCT@” looks at the parents still to be interviewed. It assumes each of them contributes with the same probability as the class average so far, "
+                "and adds up how likely it is that enough of them will contribute to bring the class to @PCT@. Above 50% is “On track”; below is “At risk”.",
         "care": "It is a projection from current bids, not a promise. It sharpens as more parents in the class are interviewed.",
     },
 }
@@ -99,17 +100,17 @@ def card_text(target):
                      "Har school ka card: kitne parents ki list thi aur kitno ka interview ho chuka. Bar jitni bhari utna kaam mukammal. Jo school peeche ho wahan zyada visits karwaein.", None),
         # ---- classrooms
         "clStatus": ("Where do the classes stand?", "Number of classes in each status.",
-                     "Kitni classes 30% tak pahunch chuki hain (Secured), kitni pahunchne wali hain (On track), kitni khatre mein (At risk), aur kitni ab pahunch hi nahi sakti (Cannot reach). Har class ko alag alag dekha jata hai, poore sample ko nahi.", "classrule"),
+                     "Kitni classes @PCT@ tak pahunch chuki hain (Secured), kitni pahunchne wali hain (On track), kitni khatre mein (At risk), aur kitni ab pahunch hi nahi sakti (Cannot reach). Har class ko alag alag dekha jata hai, poore sample ko nahi.", "classrule"),
         "clDist": ("How many classes are near the target?", "Classes grouped by how much of the contributors they need they already have.",
-                   "Har class ko purifier ke liye kuch contributors chahiyein (class ka 30%). Yeh graph batata hai kitni classes ke paas zaroori contributors ka 0-25%, 25-50%, 50-75%, 75-100% aur poora (100%+) hai. Aakhri (hara) group wali classes ko purifier mil jata hai.", None),
-        "clBars": ("How close is each class to the number it needs?", "Contributors so far as a share of the number needed (30% of the class). The dashed line is 100%: secured.",
-                   "Har class ek bar hai. Bar batati hai ke class ko jitne contributors chahiyein (class ka 30%) un mein se kitne ho chuke. Bar ke aakhir mein likha hai, jaise '9 of 12': 12 chahiyein, 9 ho gaye. Dashed line 100% hai: jo bar us se aagay nikal jaye us class ko purifier mil jata hai. Jinka interview nahi hua unhein contribute nahi gina jata. Rang status batata hai: hara = secured, neela = on track, narangi = at risk, laal = cannot reach.", "classrule"),
+                   "Har class ko purifier ke liye kuch contributors chahiyein (class ka @PCT@). Yeh graph batata hai kitni classes ke paas zaroori contributors ka 0-25%, 25-50%, 50-75%, 75-100% aur poora (100%+) hai. Aakhri (hara) group wali classes ko purifier mil jata hai.", None),
+        "clBars": ("How close is each class to the number it needs?", "Contributors so far as a share of the number needed (@PCT@ of the class). The dashed line is 100%: secured.",
+                   "Har class ek bar hai. Bar batati hai ke class ko jitne contributors chahiyein (class ka @PCT@) un mein se kitne ho chuke. Bar ke aakhir mein likha hai, jaise '9 of 12': 12 chahiyein, 9 ho gaye. Dashed line 100% hai: jo bar us se aagay nikal jaye us class ko purifier mil jata hai. Jinka interview nahi hua unhein contribute nahi gina jata. Rang status batata hai: hara = secured, neela = on track, narangi = at risk, laal = cannot reach.", "classrule"),
         "clSchool": ("How does each school's classes split?", "Each bar is one school; the colours are its classes' status.",
                      "Har school ki classes kin kin status mein hain. Number classes ki ginti hai. Is se pata chalta hai kaun se school ki classes zyada tar purifier hasil kar rahi hain.", None),
         "clArm": ("Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group.",
                   "Control, Video 1 aur Video 2 mein kitne % parents ka random price unke bid se kam nikla (yani woh contribute karenge). Video ka asar dekhne ka seedha tareeqa.", None),
-        "clTable": ("Every class, one line each", "Click a column to sort, or filter by school. “Chance” is the probability of reaching 30% once the parents still to interview are counted.",
-                    "Har class ki poori tafseel: class size, kitne parents ka interview hua, kitne contribute kar rahe hain, kitne chahiyein (30%), aur baaqi parents ke baad 30% tak pahunchne ka imkaan (Chance). Status aakhri column mein hai.", "chance"),
+        "clTable": ("Every class, one line each", "Click a column to sort, or filter by school. “Chance” is the probability of reaching @PCT@ once the parents still to interview are counted.",
+                    "Har class ki poori tafseel: class size, kitne parents ka interview hua, kitne contribute kar rahe hain, kitne chahiyein (@PCT@), aur baaqi parents ke baad @PCT@ tak pahunchne ka imkaan (Chance). Status aakhri column mein hai.", "chance"),
         # ---- field ops
         "opsCum": ('Are we on pace to finish?', "Interviews done so far, where today's pace takes us (dashed), and the target (red).",
                     'Hari line ab tak ke mukammal interviews hain. Dashed line maujooda raftaar par agla andaza hai aur laal line target. Jahan dashed line laal line ko chhoti hai wahi mutawaqqa khatam hone ki tareekh hai.', "cum"),
@@ -152,7 +153,7 @@ def card_text(target):
         "awRank": ("How important is school air quality?", "Compared with better teachers, facilities or books.", "School ki hawa ki ahmiyat doosri cheezon (ustaad, facilities, kitaabein) ke muqablay mein kitni hai. 1 = bohat kam, 5 = bohat ziyada.", None),
         # ---- willingness to pay
         "wtDist": ("How much would parents pay?", "The most each parent would contribute, after any change, in rupees.",
-                   "Har parent ne kitne rupay dene ka kaha, groups mein. Lambi bar = ziyada parents. Rs 2,000 par bar isliye hoti hai ke woh had (maximum) thi.", "bid"),
+                   "Har parent ne kitne rupay dene ka kaha, groups mein. Lambi bar = ziyada parents. Rs @CAP@ par bar isliye hoti hai ke woh had (maximum) thi.", "bid"),
         "wtDemand": ('How many parents would pay at least this much?', 'Share of parents whose bid is at or above each amount.',
                     'Har bar ek raqam hai (Rs 100, 250, 500...). Bar batati hai kitne % parents ne itne ya us se zyada ka bid diya. Raqam barhti hai to bar chhoti hoti jati hai.', None),
         "wtGroup": ('Average amount parents would pay, by group', 'Average final bid for each group; not affected by the filter above.',
@@ -160,7 +161,7 @@ def card_text(target):
         "wtOthers": ("What parents expect other parents to pay", "Average guess of how the other parents in the class will behave.", "Har parent ne andaza lagaya ke class ke doosre parents kitna denge. Bars unka average andaza hain (class ka hissa %).", "others"),
         "wtChange": ("Did parents change their bid?", "After seeing the result of the random draw.", "Random number dekhne ke baad kitne parents ne apna bid badla.", None),
         "wtCertain": ("How sure are parents of their bid?", "Certainty about the amount chosen.", "Parents apne bid par kitne yaqeen mein hain.", None),
-        "wtWhy": ("Why not pay more?", "Main reason given by parents who bid below the maximum.", "Jinhon ne Rs 2,000 se kam bid kiya unhon ne ziyada kyun nahi diya.", None),
+        "wtWhy": ("Why not pay more?", "Main reason given by parents who bid below the maximum.", "Jinhon ne Rs @CAP@ se kam bid kiya unhon ne ziyada kyun nahi diya.", None),
         "wtPractice": ("Practice round", "A Rs 0–20 practice before the real question.", "Asli sawal se pehle Rs 0 se 20 ki mashq (practice). Yeh sirf samajhne ke liye thi.", None),
         "wtSel": ("Understanding check 1", "If selected and the random price is above the bid, is the Rs 1,000 bonus still received?", "Samajh ki jaanch: kya parents ne bonus wala rule sahi samjha.", None),
         "wtNot": ("Understanding check 2", "If not selected, which bid is used?", "Samajh ki jaanch: agar parent muntakhib na ho to kaun sa bid use hota hai.", None),
@@ -222,7 +223,7 @@ def auto_read(kind, d, opt, cid=None):
                 if len(ss) == 1:
                     y = ss[0]["y"]
                     ok = [i for i, v in enumerate(y) if v is not None and v >= 30]
-                    tail = f" The 30% line is still met up to about <strong>Rs {ok[-1] * 100:,}</strong>." if ok else " Fewer than 30% would pay even the lowest price."
+                    tail = f" The @PCT@ line is still met up to about <strong>Rs {ok[-1] * 100:,}</strong>." if ok else " Fewer than @PCT@ would pay even the lowest price."
                     return f"<strong>{y[5]:.0f}%</strong> of parents would pay at least Rs 500 and <strong>{y[10]:.0f}%</strong> at least Rs 1,000." + tail
                 return "Share still willing to pay Rs 1,000 or more: " + " · ".join(f"{s['name'].split(' (')[0]} <strong>{s['y'][10]:.0f}%</strong>" for s in ss if s["y"][10] is not None)
             s0 = d["series"][0]

@@ -456,6 +456,7 @@
         <span class="header-pill" id="meta-pill">—</span>
         <div class="hdr-btns">
           <button class="hdr-btn" onclick="toggleTheme()" title="Switch light / dark theme"><span class="themeIcon">🌙</span> <span class="themeTxt">Dark</span></button>
+          <button class="hdr-btn" id="hdrRaw" style="display:none" onclick="downloadRaw()" title="Download the field data as a CSV file">⬇ Data (CSV)</button>
           <button class="hdr-btn" onclick="printReport()" title="Print or save every section as a PDF">🖨️ Print</button>
           <button class="hdr-btn" onclick="signOut()" title="Lock the dashboard">🔒 Lock</button>
         </div>
@@ -857,6 +858,33 @@ function downloadCSV(name, t){
   a.href = URL.createObjectURL(new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8;'}));
   a.download = name + '.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
+function saveText(name, text){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + text], {type:'text/csv;charset=utf-8;'}));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function downloadRaw(){ if (DATA && DATA.raw) saveText(DATA.raw.name, DATA.raw.csv); }
+function downloadBook(){ if (DATA && DATA.raw && DATA.raw.book) saveText(DATA.raw.book_name, DATA.raw.book); }
+function downloadHTML(){
+  const r = DATA.raw;
+  if (!r) return '<div class="chart-card"><div class="empty">The raw-data download is switched off for this dashboard.</div></div>';
+  const mb = (r.csv.length / 1048576).toFixed(1);
+  return `<div class="chart-grid cols-2">
+    <div class="chart-card"><h3 style="margin:0 0 6px">Field data (CSV)</h3>
+      <p style="margin:0 0 14px;color:var(--text-2);font-size:13px;line-height:1.6">Every submission received so far, one row per interview, with the same columns and answer codes as the SurveyCTO export.
+      Last submission: <strong>${esc(r.last)}</strong>. About ${mb} MB.</p>
+      <button class="mz-export" id="dl-raw">⬇ Download ${esc(r.name)}</button></div>
+    <div class="chart-card"><h3 style="margin:0 0 6px">Codebook (CSV)</h3>
+      <p style="margin:0 0 14px;color:var(--text-2);font-size:13px;line-height:1.6">One line per question: variable name, question text, type, and what each answer code means.
+      Use it to read the numeric codes in the data file.</p>
+      <button class="mz-export" id="dl-book">⬇ Download ${esc(r.book_name)}</button></div></div>`;
+}
+function bindDownload(el){
+  const a = el.querySelector('#dl-raw'), b = el.querySelector('#dl-book');
+  if (a) a.onclick = downloadRaw;
+  if (b) b.onclick = downloadBook;
+}
 function downloadPNG(c){
   const canvas = $('ch-' + c.id), ch = canvas && Chart.getChart(canvas); if (!ch) return;
   const out = document.createElement('canvas'); out.width = ch.canvas.width; out.height = ch.canvas.height;
@@ -1028,6 +1056,7 @@ function blockHTML(b){
     case 'note': return `<p class="footnote">${b.html}</p>`;
     case 'blocks': return `<div class="land-prog-head">${esc(b.head)}</div>${blocksHTML(b.d)}<p class="footnote" style="margin-top:8px;margin-bottom:22px">${esc(b.foot)}</p>`;
     case 'tracker': return trackerHTML(b.d);
+    case 'download': return downloadHTML();
   }
   return '';
 }
@@ -1049,6 +1078,7 @@ function renderPanel(id){
     p.blocks.forEach(b => {
       if (b.t === 'grid') b.cards.forEach(c => { drawCard(c); bindCard(c); });
       if (b.t === 'tracker') bindTracker(b.d);
+      if (b.t === 'download') bindDownload(el);
     });
   }
   animateKpis(el);
@@ -1105,6 +1135,7 @@ function boot(data){
   ban.innerHTML = m.mode === 'demo'
     ? `<span class="live-dot"></span><span class="live-pill">Demo data</span><span>These figures are <strong style="color:#fff">illustrative dummy responses</strong> that show how the dashboard will look. They are replaced automatically when the first SurveyCTO export is loaded. Built <strong style="color:#fff">${esc(m.built)}</strong>.</span>`
     : `<span class="live-dot"></span><span class="live-pill">Live</span><span>Field data through <strong style="color:#fff">${esc(m.last_date)}</strong> · refreshed <strong style="color:#fff">${esc(m.built)}</strong>.</span><span class="live-pill">${m.pct_complete}% of target</span>`;
+  $('hdrRaw').style.display = data.raw ? '' : 'none';
   $('ft-title').textContent = m.title; $('ft-domain').textContent = m.domain || '';
   $('ft-updated').textContent = 'Built ' + m.built;
 
