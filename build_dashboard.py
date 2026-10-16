@@ -75,7 +75,7 @@ MIN_CELL = int(CFG.get("small_cell_min", 5))
 PREFER = CFG.get("prefer", "dta")
 ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.40))      # overridden below by the rule actually coded in the form
-RAW_INCLUDE_PII = bool(CFG.get("raw_download_include_pii", False))   # raw-data download button: identifiers are stripped unless this is switched on
+RAW_INCLUDE_PII = bool(CFG.get("raw_download_include_pii", True))    # raw-data download: every column as delivered; false strips identifier columns
 RAW_DOWNLOAD = bool(CFG.get("raw_download", True))
 # don't-know / non-response flags (client comment, Sep 2026): a question is flagged when more than
 # this share of the respondents it was actually asked answer Don't Know / Refused / Not sure or leave
@@ -1972,55 +1972,27 @@ PANELS.append({
 # ---- tabs removed on request (Field Ops, Fairness, Patience)
 PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
 
-# ====================================================================== DATA DOWNLOAD (raw export + codebook)
-# The client can pull the field data straight from the dashboard. It is the export exactly as received (same
-# columns, same answer codes, every submission) from the file(s) dropped in ..\Data. Identifier columns
-# (names, phone numbers, addresses, GPS points, device ids, free-text names) are left out unless
-# "raw_download_include_pii" is switched on in the local config. The file travels inside the encrypted payload.
+# ====================================================================== DATA DOWNLOAD (raw CSV, in the Overview)
+# The client downloads the field data exactly as delivered: with only a CSV in ..\Data the file is passed through
+# byte for byte; with a .dta (or both) it is written out with the export's own column names, every column and row.
+# It travels inside the AES-encrypted payload, so only someone with the dashboard password can open or download it.
+# Set "raw_download_include_pii": false in the local config to strip identifier columns instead.
 RAW = None
 if RAW_DOWNLOAD:
-    _keep = [c for c in RAW_DF.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
-    _raw_out = RAW_DF[_keep].rename(columns=lambda c: ORIG_NAMES.get(c, c))
-    _csv = _raw_out.to_csv(index=False)
-    if not RAW_INCLUDE_PII:                                   # free text can still hold a typed phone number or e-mail
-        _csv, _nsub = re.subn(r"\b03\d{9}\b|\b\+?92\d{10}\b|[\w.]+@[\w.]+\.\w+", "[removed]", _csv)
-        if _nsub:
-            say(f"Raw data  : {_nsub} phone-number / e-mail pattern(s) typed into free text were masked in the download")
-    _lists = {}
-    for _, _r in _ch.iterrows():
-        _ln = str(_r["list_name"]).strip()
-        if _ln:
-            _lists.setdefault(_ln, []).append(f"{str(_r['value']).strip()} = {re.sub(chr(10) + '|' + chr(160), ' ', str(_r[_labcol])).strip()}")
-    _book = []
-    for _, _r in _sv.iterrows():
-        _t, _nm = str(_r["type"]).strip(), str(_r["name"]).strip()
-        if not _nm or _t.split(" ")[0] in ("begin", "end", "note"):
-            continue
-        _ln = _t.split(" ")[1] if _t.split(" ")[0] in ("select_one", "select_multiple") and len(_t.split(" ")) > 1 else ""
-        _book.append({"variable": _nm, "type": _t.split(" ")[0], "question": re.sub(r"\s+", " ", str(_r[_sv_lab]).replace(chr(160), " ")).strip(),
-                      "choice_list": _ln, "answer_codes": "; ".join(_lists.get(_ln, [])),
-                      "asked_when": str(_r.get("relevance", "")).strip(), "required": str(_r.get("required", "")).strip(),
-                      "repeated_per_child": "yes (columns end _1, _2 ...)" if _nm in REPEAT_VARS else "",
-                      "in_download": "no (identifier removed)" if (not RAW_INCLUDE_PII and is_pii(_nm)) else "yes"})
-    _book_csv = pd.DataFrame(_book).to_csv(index=False)
     _last = RAW_DF["starttime"].replace("", np.nan).dropna().max() if "starttime" in RAW_DF else ""
-    RAW = {"name": f"AirQuality_field_data_{datetime.now().strftime('%Y-%m-%d')}.csv", "book_name": "AirQuality_codebook.csv", "csv": _csv, "book": _book_csv,
-           "rows": int(len(_raw_out)), "cols": int(_raw_out.shape[1]), "last": str(_last)[:16] if _last else "—", "pii": RAW_INCLUDE_PII}
+    if csv_path and not dta_path and RAW_INCLUDE_PII:
+        _csv = csv_path.read_text(encoding="utf-8-sig")
+        _ncols = len(RAW_DF.columns) - 1
+    else:
+        _keep = [c for c in RAW_DF.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+        _raw_out = RAW_DF[_keep].rename(columns=lambda c: ORIG_NAMES.get(c, c))
+        _csv = _raw_out.to_csv(index=False)
+        _ncols = _raw_out.shape[1]
+    RAW = {"name": f"AirQuality_field_data_{datetime.now().strftime('%Y-%m-%d')}.csv", "csv": _csv,
+           "rows": int(len(RAW_DF)), "cols": int(_ncols), "last": str(_last)[:16] if _last else "-", "pii": RAW_INCLUDE_PII}
     say(f"Raw data  : {RAW['rows']} submission(s) x {RAW['cols']} columns, {len(_csv) / 1048576:.1f} MB CSV "
-        f"({'identifiers INCLUDED' if RAW_INCLUDE_PII else 'identifiers removed: ' + str(len(RAW_DF.columns) - len(_keep) - sum(1 for c in RAW_DF.columns if c.startswith('_'))) + ' column(s)'})")
-    PANELS.append({
-        "id": "data", "tab": "📥 Data", "eyebrow": "Section 11 · Data download", "title": "Download the Field Data",
-        "blurb": "The interview data received so far, as a CSV file, with the same columns and answer codes as the field-collection export, plus a codebook that explains every column.",
-        "seg": False, "blocks": [
-            {"t": "kpis", "d": [K("📄", fmt_n(RAW["rows"]), "Submissions in the File", "Every attempt received, one row each", "navy", "navy"),
-                               K("🧾", fmt_n(RAW["cols"]), "Columns", "Same names as the export", "neutral", "teal"),
-                               K("🕓", RAW["last"], "Latest Submission", f"File built {META['built']}", "neutral", "amber"),
-                               K("🔒", "Included" if RAW_INCLUDE_PII else "Removed", "Personal Identifiers", "Names, phone numbers, addresses, GPS points, device IDs", "up" if not RAW_INCLUDE_PII else "down", "green" if not RAW_INCLUDE_PII else "")]},
-            {"t": "download"},
-            {"t": "note", "html": "Answers are stored as numeric codes exactly as the field software records them; the codebook lists what each code means. Repeated questions asked once per child end in <code>_1</code>, <code>_2</code> … "
-                                 "Rows include completed interviews, partial interviews and refusals: use <code>status_survey</code> to select completed ones. "
-                                 + ("" if RAW_INCLUDE_PII else "Respondent names, phone numbers, addresses, GPS points and device identifiers are not part of this file.")},
-        ]})
+        f"({'all columns, nothing removed' if RAW_INCLUDE_PII else 'identifier columns removed'})")
+    overview["blocks"].insert(2, {"t": "download"})
 for _r in qa_rows:
     if _r["n"]:
         say(f"  check: {_r['name']}: {_r['n']} record(s)")
