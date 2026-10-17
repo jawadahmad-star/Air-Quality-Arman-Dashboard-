@@ -567,6 +567,14 @@ for _k in range(1, max(K_MAX, 1) + 1):
     _kid_parts.append(_p)
 KID = pd.concat(_kid_parts, ignore_index=True)
 KID["_sec"] = [_norm_sec(a_, b_, c_) for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
+# a child typed into another class of the school usually has no section recorded: if the data shows exactly one
+# section for that school + grade, the blank belongs to it (otherwise it would show up as a phantom extra class)
+_known_secs = {}
+for _s_, _g_, _x_ in zip(pd.concat([D["_sch"], KID["_sch"]]), pd.concat([D["_gradeN"], KID["_gradeN"]]), pd.concat([D["_sec"], KID["_sec"]])):
+    if pd.notna(_s_) and pd.notna(_g_) and str(_x_).strip():
+        _known_secs.setdefault((_s_, _g_), set()).add(str(_x_).strip())
+KID["_sec"] = [(next(iter(_known_secs[(a_, b_)])) if (not str(c_).strip() and (a_, b_) in _known_secs and len(_known_secs[(a_, b_)]) == 1) else c_)
+               for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
 KID["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
 _ok_k = KID["_rand"].notna() & KID["_bid"].notna()
 KID["_hit"] = np.where(_ok_k, (KID["_rand"] <= KID["_bid"]).astype(float), np.nan)
