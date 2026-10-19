@@ -1232,91 +1232,14 @@ if arms_ok:
 kf.append({"cls": "teal", "html": f"<strong>Pace:</strong> {per_day:.1f} completed interviews per field day; "
            f"<strong>{fmt_n(remaining)}</strong> households remain" + (f", so the target is reached around <strong>{fdate(proj_finish)}</strong> at this rate." if days_left else ".")})
 
-# ---- phone screening calls (Data phone survey): enumerators call parents first, then visit those who said yes
-PHONE_DIR = ROOT / "Data phone survey"
-PHONE_FORM = ROOT / "Instrument" / "air_quality_call_survey.xlsx"
-ph_blocks, ph_callouts = [], []
-try:
-    _pf = sorted(PHONE_DIR.glob("*_WIDE.csv"))
-    if _pf:
-        _p = pd.read_csv(_pf[0], dtype=str, keep_default_na=False, encoding="utf-8-sig")
-        _p["_hh"] = pd.to_numeric(_p["hh_id"], errors="coerce")
-        _p["_st"] = pd.to_numeric(_p["status_survey"], errors="coerce")
-        _p["_dt"] = pd.to_datetime(_p["starttime"], errors="coerce")
-        _p["_sc"] = pd.to_numeric(_p["enum_school"], errors="coerce")
-        _pch = pd.read_excel(PHONE_FORM, sheet_name="choices").fillna("") if PHONE_FORM.exists() else pd.DataFrame(columns=["list_name", "value", "label: eng"])
-        _plab = lambda ln: {int(r["value"]): str(r["label: eng"]).replace("\u2060", "").strip() for _, r in _pch[_pch["list_name"] == ln].iterrows()}
-        PH_ST, PH_SCH = _plab("status_survey"), {k: _short(v) for k, v in _plab("school_list").items()}
-        _p = _p.dropna(subset=["_hh", "_st"]).sort_values("_dt")
-        # a parent can be called several times: ONE row per household, "Completed" (agreed) wins, otherwise the latest attempt
-        _ph = []
-        for _h, _g in _p.groupby("_hh"):
-            _fin = 1 if (_g["_st"] == 1).any() else int(_g["_st"].iloc[-1])
-            _ph.append({"hh": int(_h), "st": _fin, "att": len(_g), "sc": PH_SCH.get(int(_g["_sc"].iloc[-1]), "—") if pd.notna(_g["_sc"].iloc[-1]) else "—"})
-        _ph = pd.DataFrame(_ph)
-        if len(_ph):
-            def _grp(c):
-                return ("Agreed" if c == 1 else "Partial" if c == 2 else "Not picked" if c in (12, 8, 10) else "Powered off" if c == 11
-                        else "Wrong / invalid number" if c in (13, 14) else "Refused" if c in (3, 4, 5, 6) else "Other")
-            _ph["g"] = _ph["st"].map(_grp)
-            n_ph_hh, n_ph_calls = len(_ph), len(_p)
-            g_ct = _ph["g"].value_counts().to_dict()
-            n_agreed = g_ct.get("Agreed", 0)
-            n_field_done = int(_ph.loc[_ph["st"] == 1, "hh"].isin(C["_hh"].dropna().astype(int)).sum())
-            ph_disp = [{"l": PH_ST.get(int(v), str(v)), "n": int((_ph["st"] == v).sum())} for v in sorted(_ph["st"].unique())]
-            ph_disp = sorted(ph_disp, key=lambda x: -x["n"])
-            for x in ph_disp:
-                x["p"] = pct(x["n"], n_ph_hh)
-                x["lab"] = f"{x['n']:,} · {x['p']:.0f}%"
-            _gc = ["Agreed", "Not picked", "Powered off", "Wrong / invalid number", "Refused", "Partial", "Other"]
-            _rows = []
-            for _s, _g in _ph.groupby("sc"):
-                _na = int((_g["g"] == "Agreed").sum())
-                _r = {"school": _s, "hh": len(_g), "calls": int(_g["att"].sum()), "agree": {"v": round(pct(_na, len(_g)), 1), "t": f"{_na} · {pct(_na, len(_g)):.0f}%"}}
-                for _c in _gc[1:]:
-                    _r[_c] = int((_g["g"] == _c).sum())
-                _rows.append(_r)
-            ph_table = {"cols": [{"k": "school", "l": "School"}, {"k": "hh", "l": "Parents called", "num": True}, {"k": "calls", "l": "Calls made", "num": True},
-                                 {"k": "agree", "l": "Agreed to survey", "num": True}, {"k": "Not picked", "l": "Not picked", "num": True}, {"k": "Powered off", "l": "Phone off", "num": True},
-                                 {"k": "Wrong / invalid number", "l": "Wrong / invalid", "num": True}, {"k": "Refused", "l": "Refused", "num": True},
-                                 {"k": "Partial", "l": "Partial", "num": True}, {"k": "Other", "l": "Other", "num": True}],
-                        "rows": _rows,
-                        "read": f"One line per school. Each parent is counted once, even if called several times (<strong>{n_ph_calls}</strong> calls to <strong>{n_ph_hh}</strong> parents)."}
-            ph_kpis = [
-                K("📞", fmt_n(n_ph_hh), "Parents Called", f"{n_ph_calls} calls in all · {n_ph_calls / n_ph_hh:.1f} tries per parent", "navy", "navy"),
-                K("🤝", fmt_n(n_agreed), "Agreed on the Call", f"{pct(n_agreed, n_ph_hh, 0):.0f}% of parents called · {n_field_done} already interviewed in the field", "up", "green"),
-                K("📵", fmt_n(g_ct.get("Not picked", 0)), "Did Not Pick Up", "Still to be retried", "neutral", "amber"),
-                K("🔌", fmt_n(g_ct.get("Powered off", 0)), "Phone Switched Off", "Still to be retried", "neutral", "amber"),
-                K("🚫", fmt_n(g_ct.get("Wrong / invalid number", 0) + g_ct.get("Refused", 0)), "Wrong Number or Refused", f"{g_ct.get('Wrong / invalid number', 0)} wrong / invalid · {g_ct.get('Refused', 0)} refused", "down", ""),
-            ]
-            ph_blocks = [
-                {"t": "head", "text": "📞 Phone Screening Calls"},
-                {"t": "insight_static", "cls": "teal", "html": "<strong>How to read this:</strong> before visiting a home, the team phones the parent. A parent who says <em>yes</em> on the call (status “Completed”) is then visited in the field for the full survey; "
-                                                               "a parent who refuses, does not pick up or has a switched-off or wrong number is not visited until a later call works. "
-                                                               "Parents are called more than once, so every parent is counted <strong>once</strong>: as “Agreed” if any call ended in a yes, otherwise by the result of the latest call."},
-                {"t": "kpis", "d": ph_kpis},
-                {"t": "grid", "cols": 1, "cards": [
-                    card("hbar", "ovCalls", "Phone Call Outcome", "Final result for each parent called, one per parent", {"items": ph_disp, "base": n_ph_hh}, opt={"color": 1, "fmt": "n"}),
-                    card("table", "ovCallSchool", "Phone Calls by School", "Calls and outcomes for each school", ph_table, full=True)]},
-            ]
-            ph_callouts = [{"cls": "navy", "icon": "📞", "h": "Phone screening",
-                            "p": f"{n_ph_hh} parents called ({n_ph_calls} calls): {n_agreed} agreed, {g_ct.get('Not picked', 0)} did not pick up, {g_ct.get('Powered off', 0)} phones off, "
-                                 f"{g_ct.get('Wrong / invalid number', 0)} wrong or invalid, {g_ct.get('Refused', 0)} refused."}]
-            say(f"Phone calls: {n_ph_calls} calls -> {n_ph_hh} unique parents · agreed {n_agreed}")
-except Exception as e:                                     # never let the phone block kill the build
-    say(f"  ! phone-call block skipped: {e!r}")
-    ph_blocks, ph_callouts = [], []
-
 overview = {
     "id": "overview", "tab": "📊 Overview", "eyebrow": "Section 01", "title": "Programme at a Glance",
     "blurb": f"Where fieldwork stands against the {N_TARGET:,}-household sample across {n_cls} classes in {len(cls_schools)} schools: completed interviews, how many classrooms are on course for a purifier, "
              "how the three randomised study groups are filling, and the headline findings so far.",
     "seg": False, "blocks": [
         {"t": "kpis", "d": ov_kpis},
-        {"t": "callouts", "d": ov_callouts + ph_callouts},
+        {"t": "callouts", "d": ov_callouts},
         {"t": "insights", "d": kf, "row": False},
-        *ph_blocks,
-        {"t": "head", "text": "🏠 Field Interviews"},
         {"t": "grid", "cols": 1, "cards": [
             card("lines", "ovDaily", "Daily Completed Interviews", "Completed interviews per field day",
                  {"x": [x["d"] for x in daily], "series": [{"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True}]},
