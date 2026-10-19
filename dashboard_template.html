@@ -1046,6 +1046,7 @@ function blockHTML(b){
     case 'insights': { const a = sv(b.d); if (!a || !a.length) return ''; return `<div class="${b.row ? 'insight-row' : 'insight-stack'}">${a.map(i => `<div class="insight-box ${i.cls}">${i.html}</div>`).join('')}</div>`; }
     case 'insight_static': return `<div class="insight-box ${b.cls}" style="margin-bottom:22px">${b.html}</div>`;
     case 'grid': return `<div class="chart-grid cols-${b.cols}">${b.cards.map(cardHTML).join('')}</div>`;
+    case 'head': return `<div class="land-prog-head" style="margin-top:10px">${esc(b.text)}</div>`;
     case 'note': return `<p class="footnote">${b.html}</p>`;
     case 'blocks': return `<div class="land-prog-head">${esc(b.head)}</div>${blocksHTML(b.d)}<p class="footnote" style="margin-top:8px;margin-bottom:22px">${esc(b.foot)}</p>`;
     case 'tracker': return trackerHTML(b.d);
