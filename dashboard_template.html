@@ -759,11 +759,13 @@ function funnelHTML(d){
 }
 function blocksHTML(rows){
   return `<div class="land-prog">` + rows.map(r => {
-    const p = Math.min(r.pct, 100), c = barColor(r.pct);
+    const hasT = r.target != null, p = hasT ? Math.min(r.pct, 100) : 0, c = barColor(hasT ? r.pct : 0);
+    const pa = hasT && r.att ? Math.min(100 - p, Math.round(100 * r.att / r.target)) : 0;
+    const ext = r.att != null ? `<div class="lc-sub" style="margin-top:6px"><strong>${r.att.toLocaleString()}</strong> more tried by phone, not interviewed (${r.retry} to call again · ${r.final} refused / wrong number)<br><strong>${r.reach.toLocaleString()}</strong> parents reached in all${hasT ? ` · ${r.reach_pct}% of ${r.target.toLocaleString()}` : ''}</div>` : '';
     return `<div class="land-card"><div class="lc-bin">${esc(r.bin)}</div><div class="lc-sub">${esc(r.sub||'')}</div>
-      <div class="lc-frac">${r.done.toLocaleString()} <span class="lc-tgt">/ ${r.target.toLocaleString()}</span></div>
-      <div class="lc-track"><span style="width:${p}%;background:${c}"></span></div>
-      <div class="lc-foot"><span class="lc-pct" style="color:${c}">${r.pct}%</span>${badge(r.status)}</div></div>`;
+      <div class="lc-frac">${r.done.toLocaleString()} <span class="lc-tgt">${hasT ? '/ ' + r.target.toLocaleString() + ' completed' : 'completed'}</span></div>
+      <div class="lc-track"><span style="width:${p}%;background:${c}"></span>${pa ? `<span style="width:${pa}%;background:${c};opacity:.35"></span>` : ''}</div>
+      <div class="lc-foot"><span class="lc-pct" style="color:${c}">${hasT ? r.pct + '%' : '—'}</span>${badge(r.status)}</div>${ext}</div>`;
   }).join('') + `</div>`;
 }
 function calendarHTML(d){

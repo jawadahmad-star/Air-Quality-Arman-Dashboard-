@@ -1057,6 +1057,64 @@ def next_workdays(start, k):
 proj_finish = next_workdays(last_ts, days_left)[-1] if (n_field_days and days_left) else last_ts
 conv = pct(N_C, N_ATT)
 
+# ---- phone screening calls (Data phone survey): enumerators call parents first, then visit the ones who agree.
+# One row per PARENT (a parent called several times counts once; a "Completed" call wins, otherwise the latest call).
+# Parents who could not be interviewed by phone (switched off, not picked, wrong number, refused) are added to the
+# attempts and the non-response; parents already interviewed in the field are never counted twice.
+PHONE_DIR = ROOT / "Data phone survey"
+PHONE_FORM = ROOT / "Instrument" / "air_quality_call_survey.xlsx"
+ph_calls = ph_parents = n_ph_nr = n_ph_agreed = n_ph_refused = n_ph_notreached = n_ph_retry = n_ph_final = 0
+ph_disp_n = {}
+ph_school = {}                                                   # school -> phone parents not interviewed {nr, retry, final}
+_nk = lambda x: re.sub(r"\W+", " ", str(x)).upper().strip()
+try:
+    _pf = sorted(PHONE_DIR.glob("*_WIDE.csv"))
+    if _pf:
+        _p = pd.read_csv(_pf[0], dtype=str, keep_default_na=False, encoding="utf-8-sig")
+        _p["_hh"] = pd.to_numeric(_p["hh_id"], errors="coerce")
+        _p["_st"] = pd.to_numeric(_p["status_survey"], errors="coerce")
+        _p["_dt"] = pd.to_datetime(_p["starttime"], errors="coerce")
+        _pch = pd.read_excel(PHONE_FORM, sheet_name="choices").fillna("") if PHONE_FORM.exists() else pd.DataFrame(columns=["list_name", "value", "label: eng"])
+        PH_ST = {int(r["value"]): str(r["label: eng"]).replace("\u2060", "").strip() for _, r in _pch[_pch["list_name"] == "status_survey"].iterrows()}
+        _p = _p.dropna(subset=["_hh", "_st"]).sort_values("_dt")
+        ph_calls = len(_p)
+        _done_field = set(num(C, "hh_id").dropna().astype(int)) if "hh_id" in C else set(C["_hh"].dropna().astype(int))
+        _PHS = {int(r["value"]): _short(str(r["label: eng"])) for _, r in _pch[_pch["list_name"] == "school_list"].iterrows()}
+        _fin, _hsch = {}, {}
+        for _h, _g in _p.groupby("_hh"):
+            _fin[int(_h)] = 1 if (_g["_st"] == 1).any() else int(_g["_st"].iloc[-1])
+            _sv = pd.to_numeric(_g["enum_school"], errors="coerce").iloc[-1]
+            _hsch[int(_h)] = _PHS.get(int(_sv), "") if pd.notna(_sv) else ""
+        ph_parents = len(_fin)
+        n_ph_agreed = sum(1 for h, c in _fin.items() if c == 1 and h not in _done_field)
+        for h, c in _fin.items():
+            if c in (1, 2) or h in _done_field:                  # agreed / partial: not a non-response, and never double-count a field interview
+                continue
+            ph_disp_n[PH_ST.get(c, str(c))] = ph_disp_n.get(PH_ST.get(c, str(c)), 0) + 1
+            _sd = ph_school.setdefault(_hsch.get(h, ""), {"nr": 0, "retry": 0, "final": 0})
+            _sd["nr"] += 1
+            if c in (7, 8, 10, 11, 12):                          # switched off / no answer / appointment: call again
+                n_ph_retry += 1
+                _sd["retry"] += 1
+            else:                                                # refused, wrong or invalid number, ineligible: no further call
+                n_ph_final += 1
+                _sd["final"] += 1
+            if c in (3, 4, 5, 6):
+                n_ph_refused += 1
+            elif c in (7, 8, 10, 11, 12, 13, 14):
+                n_ph_notreached += 1
+        n_ph_nr = sum(ph_disp_n.values())
+        say(f"Phone calls: {ph_calls} calls -> {ph_parents} unique parents · {n_ph_nr} unsuccessful (added to attempts) · {n_ph_agreed} agreed")
+except Exception as e:                                          # never let the phone block kill the build
+    say(f"  ! phone-call block skipped: {e!r}")
+    ph_disp_n, n_ph_nr, n_ph_refused, n_ph_notreached, n_ph_agreed, n_ph_retry, n_ph_final = {}, 0, 0, 0, 0, 0, 0
+N_ATT_ALL = N_ATT + n_ph_nr                                     # field visits + unsuccessful phone parents
+conv_all = pct(N_C, N_ATT_ALL)
+n_covered = N_C + n_ph_nr                                       # parents interviewed + parents tried by phone without success
+remaining = max(N_TARGET - n_covered, 0)                        # households still open: interviewed, or already tried by phone without success, are taken off
+days_left = math.ceil(remaining / per_day) if per_day and remaining else 0
+proj_finish = next_workdays(last_ts, days_left)[-1] if (n_field_days and days_left) else last_ts
+
 META = {
     "title": CFG["title"], "subtitle": CFG["subtitle"], "location": CFG["location"],
     "mode": mode, "built": datetime.now().strftime("%d %b %Y, %H:%M"), "built_iso": datetime.now().isoformat(timespec="minutes"),
@@ -1081,7 +1139,7 @@ n_consent = int((num(D, "consent_q") == 1).sum())
 n_bid = int(C["_bid"].notna().sum())
 n_topup = int(has(C, "mobile_network").sum() or num(C, "mobile_network").notna().sum())
 funnel = [
-    {"l": "Fieldwork attempts", "n": N_ATT},
+    {"l": "All attempts (field visits + phone calls)", "n": N_ATT_ALL},
     {"l": "Reached and consented", "n": n_consent},
     {"l": "Completed interviews", "n": int((D["_status"] == 1).sum())},
     {"l": "Counted in analysis (unique, in frame)", "n": N_C},
@@ -1090,10 +1148,17 @@ funnel = [
 
 # ---- disposition
 disp_codes = CH.get("status_survey", [])
-disp = [{"l": l, "n": int((D["_status"] == v).sum())} for v, l in disp_codes]
-disp = [x for x in disp if x["n"]]
+_dn = {}
+for v, l in disp_codes:
+    _n = int((D["_status"] == v).sum())
+    if _n:
+        _dn[l] = _dn.get(l, 0) + _n
+for l, n in ph_disp_n.items():                                  # phone outcomes join the same list (same label = same bar)
+    _hit = next((k for k in _dn if k.replace("⁠", "").strip().lower() == l.lower()), None)
+    _dn[_hit or l] = _dn.get(_hit or l, 0) + n
+disp = sorted(({"l": l, "n": n} for l, n in _dn.items()), key=lambda x: -x["n"])
 for x in disp:
-    x["p"] = pct(x["n"], N_ATT)
+    x["p"] = pct(x["n"], N_ATT_ALL)
     x["lab"] = f"{x['n']:,} · {x['p']:.0f}%"
 
 # ---- assignment blocks (arm x order)
@@ -1180,20 +1245,32 @@ wtp_mean = avg(wtp_all)
 share_pos = sh(wtp_all, lambda s: s > 0)
 
 school_blocks = []
+_ph_by_key = {_nk(k): (k, v) for k, v in ph_school.items() if k}
 for _sn in cls_schools:
     _cr = [r for r in class_rows if r["school"] == _sn]
-    _t, _d = sum(r["target"] for r in _cr), sum(r["done"] for r in _cr)
+    _t = sum(r["target"] for r in _cr)
+    _d = int((C["_sch"].map(_short) == _sn).sum())              # completed interviews (one per parent) in this school, not child records
+    _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
+    _reach = _d + _ph["nr"]
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured",
-                          "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started")})
+                          "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
+                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0)})
+for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with phone calls but no field interview yet (class sizes not known: no target)
+    school_blocks.append({"bin": _sn, "sub": "Phone calls only so far", "done": 0, "target": None, "pct": 0, "status": "In Progress",
+                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _ph["nr"], "reach_pct": None})
 
 n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
-    K("✅", fmt_n(N_C), "Completed Interviews", f"{META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
-    K("🎯", fmt_n(remaining), "Households Remaining", f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted", "navy", "navy"),
+    K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"All schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
+    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"This school only · {b['pct']:.0f}% of {b['target']:,} parents", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
+    K("🎯", fmt_n(remaining), "Households Remaining",
+      (f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
+       else f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted"), "navy", "navy"),
     K("🏁", f"{n_cls_done} / {n_cls}", "Classes Finished", f"Every parent interviewed or has a final outcome · {n_cls_80} more with 5 or fewer left", "up", "teal"),
     K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"{PCTS} of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
-    K("🚪", fmt_n(N_ATT), "Fieldwork Attempts", f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
+    K("🚪", fmt_n(N_ATT_ALL), "Total Attempts · Field + Phone", f"{N_C} completed ({conv_all:.0f}%) · {n_ph_nr} phone parents not interviewed" if n_ph_nr else f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
+    *([K("📞", f"{n_covered} / {N_TARGET}", "Parents Covered So Far", f"{N_C} interviewed + {n_ph_nr} tried by phone without success · {pct(n_covered, N_TARGET, 0):.0f}% of {N_TARGET:,}", "neutral", "navy")] if n_ph_nr else []),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
     K("❓", n_dk_q_flagged, "Questions With High Don't-Know / Non-response",
       f"{n_dk_q_flagged} of {n_dk_q_total} asked questions over {DK_Q_THRESHOLD:.0f}% DK/Refused/blank" if N_C else "No completed interviews yet",
@@ -1203,7 +1280,7 @@ ov_callouts = [
     {"cls": "navy", "icon": "⚪", "h": "Control — no video", "p": f"{arm_done[0]} of {arm_target[0]} completed ({pct(arm_done[0], arm_target[0], 0):.0f}%)."},
     {"cls": "teal", "icon": "🎬", "h": "Video 1 — information film", "p": f"{arm_done[1]} of {arm_target[1]} completed ({pct(arm_done[1], arm_target[1], 0):.0f}%)."},
     {"cls": "purple", "icon": "🎞️", "h": "Video 2 — information film", "p": f"{arm_done[2]} of {arm_target[2]} completed ({pct(arm_done[2], arm_target[2], 0):.0f}%)."},
-    {"cls": "amber", "icon": "📉", "h": "Non-response", "p": f"{n_refused} refusals and {n_notreached} not reached out of {N_ATT} attempts ({pct(n_refused + n_notreached, N_ATT, 0):.0f}%)."},
+    {"cls": "amber", "icon": "📉", "h": "Non-response", "p": f"{n_refused + n_ph_refused} refusals and {n_notreached + n_ph_notreached} not reached (phone off, no answer, wrong number, no one home) out of {N_ATT_ALL} attempts, field visits and phone calls together ({pct(n_refused + n_ph_refused + n_notreached + n_ph_notreached, N_ATT_ALL, 0):.0f}%)."},
     {"cls": "amber" if n_dk_q_flagged or n_dk_records else "teal", "icon": "❓", "h": "Don't know / non-response",
      "p": (f"{n_dk_q_flagged} of {n_dk_q_total} questions over {DK_Q_THRESHOLD:.0f}% Don't-Know/Refused/blank among respondents asked; "
            f"{n_dk_records} interview(s) with {DK_RECORD_MIN}+ such answers are listed to verify under Field Operations.") if N_C else "No completed interviews yet."},
@@ -1248,7 +1325,7 @@ overview = {
             card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,} parents in the {n_cls} classes seen so far" if FRAME_IS_POOL else f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
             card("donut", "ovArm", "Completed by Study Arm", "Control · Video 1 · Video 2",
                  {"items": [{"l": ARM_LAB[v], "n": arm_done[v], "p": pct(arm_done[v], N_C)} for v in (0, 1, 2)], "base": N_C}, opt={"colors": [7, 3, 5], "fmt": "n"}),
-            card("hbar", "ovDisp", "Attempt Disposition", "Outcome of every fieldwork attempt recorded so far", {"items": disp, "base": N_ATT}, var="status_survey", opt={"color": 2, "fmt": "n"})]},
+            card("hbar", "ovDisp", "Attempt Disposition", "Outcome of every fieldwork attempt recorded so far", {"items": disp, "base": N_ATT_ALL}, var="status_survey", opt={"color": 2, "fmt": "n"})]},
         {"t": "grid", "cols": 2, "cards": [
             card("funnel", "ovFunnel", "From Attempt to Analysed Interview", "How many attempts survive each stage", {"rows": funnel}),
             card("blocks", "ovBlocks", "Progress by School", "Completed interviews against the parents listed in each school's classes", {"rows": school_blocks})]},
@@ -1259,7 +1336,7 @@ overview = {
         {"t": "note", "html": ((f"Sample: <strong>{n_cls}</strong> classes in <strong>{len(cls_schools)}</strong> schools; the parents of each class are interviewed, about <strong>{N_TARGET:,}</strong> interviews in all "
                                   f"(schools, classes and class sizes appear as the interviews report them, so this total grows as new classes start). ") if FRAME_IS_POOL else
                                  (f"Sampling frame: <strong>{N_TARGET:,}</strong> households in <strong>{n_cls}</strong> classes, pre-assigned to study arm and question order (Control = {arm_target[0]}, Video 1 = {arm_target[1]}, Video 2 = {arm_target[2]}). ")) +
-                             "Completed = <code>status_survey</code> is “Completed”, counted once per household. Research Solutions (M&amp;A Research Solutions LLC) | www.rs.org.pk"},
+                             "Completed = <code>status_survey</code> is “Completed”, counted once per household. Attempts add the phone calls: each parent is counted once however many times they were called, and parents who could not be interviewed by phone (switched off, did not pick up, wrong number, refused) count as attempts and non-response, not as completed interviews. Research Solutions (M&amp;A Research Solutions LLC) | www.rs.org.pk"},
     ]}
 PANELS.append(overview)
 
@@ -1959,8 +2036,10 @@ for r in tr_rows:
 tr_kpis = [K("🏠", f"{len(tr_rows):,}", "Households Visited" if FRAME_IS_POOL else "Households in Frame",
              "Households with at least one attempt" if FRAME_IS_POOL else f"{ARM_LAB[0]} {arm_target[0]} · {ARM_LAB[1]} {arm_target[1]} · {ARM_LAB[2]} {arm_target[2]}", "navy", "navy"),
            K("✅", st_counts.get("Completed", 0), "Completed", f"{pct(st_counts.get('Completed', 0), len(tr_rows), 0):.0f}% of households visited" if FRAME_IS_POOL else f"{pct(st_counts.get('Completed', 0), len(tr_rows), 0):.0f}% of frame", "up", "green"),
-           K("🔁", st_counts.get("Not reached", 0) + st_counts.get("Partial", 0), "To Revisit", "Not reached or partial", "neutral", "amber"),
-           K("🚫", st_counts.get("Refused", 0) + st_counts.get("Ineligible", 0), "Refused or Ineligible", "No further visit planned", "down", ""),
+           K("🔁", st_counts.get("Not reached", 0) + st_counts.get("Partial", 0) + n_ph_retry, "To Try Again",
+             f"{n_ph_retry} parents whose phone was off or did not pick up · {st_counts.get('Not reached', 0) + st_counts.get('Partial', 0)} field revisits" if n_ph_nr else "Not reached or partial", "neutral", "amber"),
+           K("🚫", st_counts.get("Refused", 0) + st_counts.get("Ineligible", 0) + n_ph_final, "Refused or Wrong Number",
+             f"Refused, wrong or invalid number: no further attempt · {n_ph_final} from phone calls" if n_ph_nr else "No further visit planned", "down", ""),
            K("🕓", st_counts.get("Not visited", 0), "Not Yet Visited", "Waiting for a first attempt", "neutral", "teal")]
 if FRAME_IS_POOL:
     tr_kpis = tr_kpis[:4]
