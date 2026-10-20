@@ -958,11 +958,11 @@ for qname, lst, kind, relfn in DK_QUESTIONS:
     codes = DK_CODES[lst]
     if kind == "one":
         v = num(C, qname)
-        is_dk = v.isin(codes) | v.isna()
+        is_dk = v.isin(codes)                                    # blanks are not counted: skip logic leaves them legitimately empty
     else:
         _codes_all = [c for c, _ in CH.get(lst, [])]
         toks, _ = _tokens(C, qname, _codes_all)
-        is_dk = toks.map(lambda t: bool(t & codes) or len(t) == 0)
+        is_dk = toks.map(lambda t: bool(t & codes))
     is_dk = is_dk & rel
     _dk_elig[qname] = rel
     _dk_flag[qname] = is_dk
@@ -980,7 +980,7 @@ for qname, (lo, hi), relfn in SENTINEL_QUESTIONS:
         continue
     rel = relfn(C).fillna(False)
     v = _numeric_val(C[qname])
-    is_dk = v.isna() | v.isin(DK_SENTINEL_VALUES) | (v < lo) | (v > hi)
+    is_dk = v.isin(DK_SENTINEL_VALUES) | (v < lo) | (v > hi)
     is_dk = is_dk & rel
     _dk_elig[qname] = rel
     _dk_flag[qname] = is_dk
@@ -997,7 +997,7 @@ n_dk_q_total = len(dk_q_rows)
 n_dk_q_flagged = sum(1 for r in dk_q_rows if r["flag"])
 dk_q_flagged_labels = [r["label"] for r in dk_q_rows if r["flag"]]
 
-# record-level: how many of the DK-eligible questions asked of this respondent came back DK/Refused/blank.
+# record-level: how many of the DK-eligible questions asked of this respondent came back Don't Know / Refused / Not sure.
 # Threshold (DK_RECORD_MIN, default 4 of up to 13 eligible items = roughly a third): an isolated "don't
 # know" on one or two items is normal survey noise; a respondent unable or unwilling to substantively
 # answer several of the knowledge/opinion items in a row is worth the field team looking again at
@@ -1006,13 +1006,13 @@ C["_dk_elig_n"] = _dk_elig.sum(axis=1)
 C["_dk_n"] = _dk_flag.sum(axis=1)
 C["_dk_share"] = np.where(C["_dk_elig_n"] > 0, 100.0 * C["_dk_n"] / C["_dk_elig_n"], 0.0)
 n_dk_records = int((C["_dk_n"] >= DK_RECORD_MIN).sum())
-say(f"DK/NR checks : {n_dk_q_flagged} of {n_dk_q_total} questions above {DK_Q_THRESHOLD:.0f}% DK/Refused/blank; "
+say(f"DK/NR checks : {n_dk_q_flagged} of {n_dk_q_total} questions above {DK_Q_THRESHOLD:.0f}% DK/Refused; "
     f"{n_dk_records} of {N_C} completed record(s) with {DK_RECORD_MIN}+ such answers")
 
 # table card shared by Overview (client-visible) and Field Operations (internal): one row per DK-eligible question
 _dk_pill = lambda flagged: {"v": 1 if flagged else 0, "t": "Verify" if flagged else "OK", "tone": "amber" if flagged else "good"}
 dk_table = {"cols": [{"k": "label", "l": "Question"}, {"k": "list", "l": "Choice list / detection"}, {"k": "base", "l": "Asked", "num": True},
-                     {"k": "n", "l": "DK / Refused / Blank", "num": True}, {"k": "p", "l": "Share", "num": True}, {"k": "flag", "l": "Status", "verdict": True}],
+                     {"k": "n", "l": "Don't Know / Refused / Not sure", "num": True}, {"k": "p", "l": "Share", "num": True}, {"k": "flag", "l": "Status", "verdict": True}],
             "rows": [{"label": r["label"], "list": r["list"], "base": r["base"], "n": r["n"],
                       "p": {"v": r["p"] if r["p"] is not None else 0, "t": "—" if r["p"] is None else f"{r['p']:.1f}%"},
                       "flag": _dk_pill(r["flag"])} for r in dk_q_rows],
@@ -1274,8 +1274,8 @@ ov_kpis = [
     K("🚪", fmt_n(N_ATT_ALL), "Total Attempts · Field + Phone", f"{N_C} completed ({conv_all:.0f}%) · {n_ph_nr} phone parents not interviewed" if n_ph_nr else f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
     *([K("📞", f"{n_covered} / {N_TARGET}", "Parents Covered So Far", f"{N_C} interviewed + {n_ph_nr} tried by phone without success · {pct(n_covered, N_TARGET, 0):.0f}% of {N_TARGET:,}", "neutral", "navy")] if n_ph_nr else []),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
-    K("❓", n_dk_q_flagged, "Questions With High Don't-Know / Non-response",
-      f"{n_dk_q_flagged} of {n_dk_q_total} asked questions over {DK_Q_THRESHOLD:.0f}% DK/Refused/blank" if N_C else "No completed interviews yet",
+    K("❓", n_dk_q_flagged, "Questions With High Don't-Know / Refused",
+      f"{n_dk_q_flagged} of {n_dk_q_total} asked questions over {DK_Q_THRESHOLD:.0f}% Don't Know/Refused" if N_C else "No completed interviews yet",
       "down" if n_dk_q_flagged else "up", "amber" if n_dk_q_flagged else "green"),
 ]
 ov_callouts = [
@@ -1332,8 +1332,8 @@ overview = {
             card("funnel", "ovFunnel", "From Attempt to Analysed Interview", "How many attempts survive each stage", {"rows": funnel}),
             card("blocks", "ovBlocks", "Progress by School", "Completed interviews against the parents listed in each school's classes", {"rows": school_blocks})]},
         {"t": "grid", "cols": 1, "cards": [
-            card("table", "ovDkQ", "Don't-Know / Non-response, by Question",
-                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of (skip-pattern cases excluded) who landed there or left it blank. Flagged above {DK_Q_THRESHOLD:.0f}%.",
+            card("table", "ovDkQ", "Don't Know / Refused / Not Sure, by Question",
+                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of (skip-pattern cases excluded) who answered Don't Know, Refused or Not sure. Blanks are not counted. Flagged above {DK_Q_THRESHOLD:.0f}%.",
                  dk_table, opt={"sortKey": "p"}, full=True)]},
         {"t": "note", "html": ((f"Sample: <strong>{n_cls}</strong> classes in <strong>{len(cls_schools)}</strong> schools; the parents of each class are interviewed, about <strong>{N_TARGET:,}</strong> interviews in all "
                                   f"(schools, classes and class sizes appear as the interviews report them, so this total grows as new classes start). ") if FRAME_IS_POOL else
@@ -1483,7 +1483,7 @@ if HAS_PLAN:
     qa("Class not matched to the school plan", "Child records whose school, class or section is not one of the planned classes (not counted in any class)", N_UNMATCHED, len(KIDC))
 qa("Class size entered inconsistently", "Classes where interviews report different class sizes", sum(r["incons"] for r in class_rows), n_cls)
 qa("Many don't-know / non-response answers",
-   f"Completed interviews where {DK_RECORD_MIN} or more of the {n_dk_q_total} don't-know-eligible questions came back Don't Know, Refused, or blank",
+   f"Completed interviews where {DK_RECORD_MIN} or more of the {n_dk_q_total} don't-know-eligible questions came back Don't Know, Refused, or Not sure",
    n_dk_records, N_C)
 n_flag_total = sum(r["n"] for r in qa_rows)
 
@@ -1548,8 +1548,8 @@ PANELS.append({
             card("calendar", "opsCal", "Field Calendar", "Completed interviews per day: darker cells are busier days; grey cells are days with no visits", cal),
             card("qa", "opsQa", "Records to Verify", "Automated checks: a flag asks the team to look again, it does not mean the record is wrong", {"rows": qa_rows})]},
         {"t": "grid", "cols": 1, "cards": [
-            card("table", "opsDkQ", "Don't-Know / Non-response by Question",
-                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of who landed there or left it blank. Flag line: {DK_Q_THRESHOLD:.0f}%.",
+            card("table", "opsDkQ", "Don't Know / Refused / Not Sure, by Question",
+                 f"Every question the instrument gives a Don't Know / Refused / Not-sure option to, and the share of respondents it was actually asked of who answered Don't Know, Refused or Not sure. Blanks are not counted. Flag line: {DK_Q_THRESHOLD:.0f}%.",
                  dk_table, opt={"sortKey": "p"}, full=True)]},
         {"t": "grid", "cols": 1, "cards": [card("table", "opsEnum", "Enumerator Scorecard", "Attempts, conversion, interview length and bid pattern by field team member. Click a column to sort.",
                                                 {"cols": [{"k": "e", "l": "Enumerator"}, {"k": "att", "l": "Attempts", "num": True}, {"k": "cmp", "l": "Completed", "num": True},
@@ -1562,7 +1562,7 @@ PANELS.append({
             card("hbar", "opsEnum2", "Output by Enumerator", "Completed interviews per field team member", enum_bar, opt={"color": 1, "fmt": "n"})]},
         {"t": "grid", "cols": 1, "cards": [card("recon", "opsRecon", "Data Source Check", "How the CSV and Stata exports compare before they are combined", recon_card)]},
         {"t": "insights", "d": ops_ins, "row": True},
-        {"t": "note", "html": "Enumerators are shown by staff code. Duration is start to submission. Checks are prompts for verification, never findings of misconduct. Don't-Know/Refused/blank shares are computed only among respondents each question was actually asked of (skip-pattern cases excluded). The projected finish extrapolates the average daily completion rate and skips Sundays."},
+        {"t": "note", "html": "Enumerators are shown by staff code. Duration is start to submission. Checks are prompts for verification, never findings of misconduct. Don't-Know/Refused shares are computed only among respondents each question was actually asked of (skip-pattern cases excluded). The projected finish extrapolates the average daily completion rate and skips Sundays."},
     ]})
 
 # ====================================================================== PANEL 3 - HOUSEHOLDS
