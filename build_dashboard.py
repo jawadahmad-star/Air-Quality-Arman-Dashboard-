@@ -529,6 +529,10 @@ def is_pii(c):
     return (c in PII_EXACT or base in PII_EXACT or str(c).lower().startswith(PII_PREFIX)) and not str(c).startswith("_")
 
 
+# one-way respondent key (name hash) so duplicates can be told from different parents sharing a pool hh_id; the names themselves are dropped below
+import hashlib
+_rn = lambda c: D[c].fillna("").astype(str).str.lower().str.strip() if c in D else ""
+D["_resp"] = (_rn("fname") + "|" + _rn("lname")).map(lambda x: hashlib.sha1(x.encode("utf-8")).hexdigest()[:10])
 _drop = [c for c in D.columns if is_pii(c)]
 D = D.drop(columns=_drop)
 assert not [c for c in D.columns if is_pii(c)], "PII column survived the guard"
@@ -612,8 +616,10 @@ if frame is not None:
     infr = comp_all["_hh"].isin(frame.index)
     n_out_of_frame = int((~infr).sum())
     comp_all = comp_all[infr]
-n_dup_rows = int(comp_all.duplicated("_hh", keep="last").sum())
-C = comp_all.sort_values("_dt").drop_duplicates("_hh", keep="last").reset_index(drop=True)
+# hh_id comes from a shared ID pool (5,000 IDs), so the same hh_id appears for different parents across rounds:
+# a duplicate is the same hh_id AND the same respondent name, not the hh_id alone.
+n_dup_rows = 0                                           # every completed submission counts: the same pool hh_id is reused by different parents
+C = comp_all.sort_values("_dt").reset_index(drop=True)
 
 KIDC = KID[KID["_row"].isin(C["_row"])].copy()           # child records belonging to the analysis-base interviews
 
@@ -1104,11 +1110,30 @@ try:
             elif c in (7, 8, 10, 11, 12, 13, 14):
                 n_ph_notreached += 1
         n_ph_nr = sum(ph_disp_n.values())
-        say(f"Phone calls: {ph_calls} calls -> {ph_parents} unique parents · {n_ph_nr} unsuccessful (added to attempts) · {n_ph_agreed} agreed")
+        say(f"Phone calls: {ph_calls} calls -> {ph_parents} unique parents · {n_ph_nr} unsuccessful · {n_ph_agreed} agreed (shown in the Overview)")
 except Exception as e:                                          # never let the phone block kill the build
     say(f"  ! phone-call block skipped: {e!r}")
     ph_disp_n, n_ph_nr, n_ph_refused, n_ph_notreached, n_ph_agreed, n_ph_retry, n_ph_final = {}, 0, 0, 0, 0, 0, 0
-N_ATT_ALL = N_ATT + n_ph_nr                                     # field visits + unsuccessful phone parents
+# ---- the phone survey is reported on its own tab; the main tabs (attempts, non-response, remaining) are field visits only
+PH = {"calls": ph_calls, "parents": ph_parents, "agreed": n_ph_agreed, "nr": n_ph_nr, "retry": n_ph_retry, "final": n_ph_final,
+      "refused": n_ph_refused, "notreached": n_ph_notreached, "disp": dict(ph_disp_n), "school": {k: dict(v) for k, v in ph_school.items()}, "rows": []}
+try:
+    if ph_calls:
+        _pr = _p.copy()
+        _pr["_sch"] = pd.to_numeric(_pr["enum_school"], errors="coerce").map(_PHS).fillna("—")
+        _pr["_cls"] = _pr["enum_class_label"].replace("", "—") if "enum_class_label" in _pr else "—"
+        _pr["_en"] = pd.to_numeric(_pr["enum_name"], errors="coerce").map(lambda c: enum_label(c) if pd.notna(c) else "—") if "enum_name" in _pr else "—"
+        _pr["_out"] = _pr["_st"].map(lambda c: PH_ST.get(int(c), str(int(c))) if pd.notna(c) else "—")
+        _pr["_att"] = _pr.groupby("_hh").cumcount() + 1
+        PH["rows"] = [{"d": r["_dt"].strftime("%b %d") if pd.notna(r["_dt"]) else "—", "e": r["_en"], "sc": r["_sch"], "cl": r["_cls"], "o": r["_out"], "n": int(r["_att"])}
+                      for _, r in _pr.sort_values("_dt", ascending=False).iterrows()]
+        PH["dates"] = _pr["_dt"].dropna().dt.strftime("%b %d").tolist()
+        PH["by_day"] = _pr.assign(_d=_pr["_dt"].dt.date).groupby("_d").size().to_dict()
+        PH["by_enum"] = _pr.groupby("_en").agg(calls=("_hh", "size"), parents=("_hh", "nunique"), ok=("_st", lambda x: int((x == 1).sum()))).reset_index().to_dict("records")
+except Exception as e:
+    say(f"  ! phone detail skipped: {e!r}")
+ph_disp_n, n_ph_nr, n_ph_refused, n_ph_notreached, n_ph_agreed, n_ph_retry, n_ph_final, ph_school = {}, 0, 0, 0, 0, 0, 0, {}
+N_ATT_ALL = N_ATT + n_ph_nr                                     # field visits only (n_ph_nr is 0 here)
 conv_all = pct(N_C, N_ATT_ALL)
 n_covered = N_C + n_ph_nr                                       # parents interviewed + parents tried by phone without success
 remaining = max(N_TARGET - n_covered, 0)                        # households still open: interviewed, or already tried by phone without success, are taken off
@@ -1260,6 +1285,10 @@ for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with ph
     school_blocks.append({"bin": _sn, "sub": "Phone calls only so far", "done": 0, "target": None, "pct": 0, "status": "In Progress",
                           "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _ph["nr"], "reach_pct": None})
 
+_nosch = int(C["_sch"].isna().sum())                          # completed interviews from earlier rounds with no school / class on record
+if _nosch:
+    school_blocks.append({"bin": "No school recorded", "sub": "Earlier rounds: school and class were not captured", "done": _nosch, "target": None, "pct": 0, "status": "Completed",
+                          "att": 0, "retry": 0, "final": 0, "reach": _nosch, "reach_pct": None})
 say("School progress: " + " | ".join(f"{b['bin']} {b['done']}/{b['target']}" for b in school_blocks))
 n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
@@ -2057,6 +2086,32 @@ PANELS.append({
         {"t": "tracker", "d": {"rows": tr_rows, "enums": sorted({r["e"] for r in tr_rows if r["e"] != "—"}), "arms": {str(k): v for k, v in ARM_LAB.items()}, "schools": cls_schools, "classes": [r["label"] for r in class_rows]}},
         {"t": "note", "html": "One row per household ID visited. Status reflects the latest attempt, or Completed if any attempt was completed. Only the household ID, assigned arm and visit outcome are shown: no names, addresses or phone numbers."},
     ]})
+
+# ---- phone survey tab (kept apart from the field interviews)
+if PH["calls"]:
+    _pd = PH["disp"]
+    _ph_kp = [K("📞", f"{PH['calls']:,}", "Phone Calls Made", f"{PH['parents']} unique parents called · {PH['calls'] - PH['parents']} repeat call(s)", "navy", "navy"),
+              K("✅", f"{PH['agreed']:,}", "Agreed to Interview", f"{pct(PH['agreed'], PH['parents'], 0):.0f}% of parents called", "up", "green"),
+              K("🔁", f"{PH['retry']:,}", "To Call Again", "Phone off, no answer or appointment", "neutral", "amber"),
+              K("🚫", f"{PH['final']:,}", "Refused or Wrong Number", "No further call planned", "down", "")]
+    _ph_dist = sorted(({"l": l, "n": n, "p": pct(n, max(PH["nr"], 1)), "lab": f"{n:,} parents"} for l, n in _pd.items()), key=lambda x: -x["n"])
+    _ph_sch = [{"sc": k or "—", "nr": v["nr"], "retry": v["retry"], "final": v["final"]} for k, v in sorted(PH["school"].items())]
+    _ph_day = [{"l": d.strftime("%b %d").replace(" 0", " "), "n": int(n)} for d, n in sorted(PH["by_day"].items())]
+    _ph_en = [{"e": r["_en"] if "_en" in r else r.get("e", "—"), "calls": int(r["calls"]), "parents": int(r["parents"]), "ok": int(r["ok"])} for r in PH["by_enum"]]
+    overview["blocks"][-1:-1] = [
+            {"t": "note", "html": "<strong>📞 Phone Survey</strong> · parents are called first and the ones who agree are visited. Kept apart from the field interviews above: phone calls are never counted in the completed interviews, attempts or non-response."},
+            {"t": "kpis", "d": _ph_kp},
+            {"t": "grid", "cols": 2, "cards": [
+                card("hbar", "phOut", "Phone Call Outcome", "Final outcome per parent (a parent called several times counts once; an agreed call wins, otherwise the latest call)", {"items": _ph_dist, "base": PH["nr"]}, opt={"color": 2, "fmt": "n"}),
+                card("bar", "phDay", "Calls per Day", "Phone calls made on each day", {"items": [{"l": x["l"], "n": x["n"], "p": pct(x["n"], max(PH["calls"], 1))} for x in _ph_day], "base": PH["calls"]}, opt={"color": 1, "fmt": "n"})]},
+            {"t": "grid", "cols": 1, "cards": [
+                card("table", "phSch", "Unsuccessful Calls by School", "Parents not interviewed by phone, by school",
+                     {"cols": [{"k": "sc", "l": "School"}, {"k": "nr", "l": "Not interviewed", "num": True}, {"k": "retry", "l": "To call again", "num": True}, {"k": "final", "l": "No further call", "num": True}], "rows": _ph_sch}, full=True, opt={"sortKey": "nr"}),
+                card("table", "phEnum", "Calls by Enumerator", "Calls made and parents who agreed, by team member",
+                     {"cols": [{"k": "e", "l": "Enumerator"}, {"k": "calls", "l": "Calls", "num": True}, {"k": "parents", "l": "Parents", "num": True}, {"k": "ok", "l": "Agreed", "num": True}], "rows": _ph_en}, full=True, opt={"sortKey": "calls"}),
+                card("table", "phLog", "Call Log", "One row per call, newest first. No names or phone numbers are shown.",
+                     {"cols": [{"k": "d", "l": "Date"}, {"k": "e", "l": "Enumerator"}, {"k": "sc", "l": "School"}, {"k": "cl", "l": "Class"}, {"k": "n", "l": "Call no.", "num": True}, {"k": "o", "l": "Outcome"}], "rows": PH["rows"]}, full=True, opt={"sortKey": "d"})]},
+    ]
 
 # ---- tabs removed on request (Field Ops, Fairness, Patience)
 PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
