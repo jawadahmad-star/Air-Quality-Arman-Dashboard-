@@ -11,6 +11,7 @@
   "anonymise_enumerators": true,
   "prefer": "dta",
   "small_cell_min": 5,
+  "school_targets": {},
   "class_threshold": 0.40,
   "raw_download": true,
   "raw_download_include_pii": false,

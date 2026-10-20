@@ -1246,19 +1246,21 @@ share_pos = sh(wtp_all, lambda s: s > 0)
 
 school_blocks = []
 _ph_by_key = {_nk(k): (k, v) for k, v in ph_school.items() if k}
-for _sn in cls_schools:
+SCHOOL_TARGET = {_short(SCHOOL_LABEL[int(_c)]): int(_n) for _c, _n in CFG.get("school_targets", {}).items() if int(_c) in SCHOOL_LABEL}   # parents per school, from the school list
+for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _short(l) not in cls_schools):                  # every school in the form shows, started or not
     _cr = [r for r in class_rows if r["school"] == _sn]
-    _t = sum(r["target"] for r in _cr)
+    _t = SCHOOL_TARGET.get(_sn) or sum(r["target"] for r in _cr)
     _d = int((C["_sch"].map(_short) == _sn).sum())              # completed interviews (one per parent) in this school, not child records
     _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
     _reach = _d + _ph["nr"]
-    school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured",
+    school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured" if _cr else "Not started yet",
                           "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
                           "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0)})
 for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with phone calls but no field interview yet (class sizes not known: no target)
     school_blocks.append({"bin": _sn, "sub": "Phone calls only so far", "done": 0, "target": None, "pct": 0, "status": "In Progress",
                           "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _ph["nr"], "reach_pct": None})
 
+say("School progress: " + " | ".join(f"{b['bin']} {b['done']}/{b['target']}" for b in school_blocks))
 n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
