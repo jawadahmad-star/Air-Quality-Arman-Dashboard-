@@ -6,7 +6,7 @@ echo ==========================================================
 echo   Air Quality Project - dashboard refresh
 echo ==========================================================
 echo.
-echo [1/4] Rebuilding from ..\Data ...
+echo [1/4] Rebuilding from the .dta files in this folder ...
 python -W ignore build_dashboard.py
 if errorlevel 1 ( echo. & echo BUILD FAILED - nothing was changed online. & pause & exit /b 1 )
 

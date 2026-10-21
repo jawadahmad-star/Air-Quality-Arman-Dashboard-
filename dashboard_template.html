@@ -761,7 +761,7 @@ function blocksHTML(rows){
   return `<div class="land-prog">` + rows.map(r => {
     const hasT = r.target != null, p = hasT ? Math.min(r.pct, 100) : 0, c = barColor(hasT ? r.pct : 0);
     const pa = hasT && r.att ? Math.min(100 - p, Math.round(100 * r.att / r.target)) : 0;
-    const ext = r.att != null ? `<div class="lc-sub" style="margin-top:6px"><strong>${r.att.toLocaleString()}</strong> more tried by phone, not interviewed (${r.retry} to call again · ${r.final} refused / wrong number)<br><strong>${r.reach.toLocaleString()}</strong> parents reached in all${hasT ? ` · ${r.reach_pct}% of ${r.target.toLocaleString()}` : ''}</div>` : '';
+    const ext = r.att != null ? `<div class="lc-sub" style="margin-top:6px"><strong>${r.att.toLocaleString()}</strong> more not interviewed (${r.detail ? esc(r.detail) : r.retry + ' to call again · ' + r.final + ' refused / wrong number'})<br><strong>${r.reach.toLocaleString()}</strong> children reached in all${hasT ? ` · ${r.reach_pct}% of ${r.target.toLocaleString()}` : ''}</div>` : '';
     return `<div class="land-card"><div class="lc-bin">${esc(r.bin)}</div><div class="lc-sub">${esc(r.sub||'')}</div>
       <div class="lc-frac">${r.done.toLocaleString()} <span class="lc-tgt">${hasT ? '/ ' + r.target.toLocaleString() + ' completed' : 'completed'}</span></div>
       <div class="lc-track"><span style="width:${p}%;background:${c}"></span>${pa ? `<span style="width:${pa}%;background:${c};opacity:.35"></span>` : ''}</div>
@@ -867,6 +867,7 @@ function saveText(name, text){
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 function downloadRaw(){ if (DATA && DATA.raw) saveText(DATA.raw.name, DATA.raw.csv); }
+function downloadPhone(){ if (DATA && DATA.raw && DATA.raw.phone) saveText(DATA.raw.phone.name, DATA.raw.phone.csv); }
 function downloadHTML(){
   const r = DATA.raw;
   if (!r) return '';
@@ -874,11 +875,16 @@ function downloadHTML(){
   return `<div class="chart-card" style="margin-bottom:22px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px">
     <div><h3 style="margin:0 0 4px">Download the field data</h3>
       <p style="margin:0;color:var(--text-2);font-size:13px;line-height:1.6">The data as received: ${r.rows.toLocaleString()} submissions, ${r.cols.toLocaleString()} columns, same column names and answer codes. Latest submission ${esc(r.last)} · about ${mb} MB.</p></div>
-    <button class="mz-export" id="dl-raw">⬇ Download CSV</button></div>`;
+    <button class="mz-export" id="dl-raw">⬇ Download CSV</button></div>` + (r.phone ? `
+  <div class="chart-card" style="margin-bottom:22px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px">
+    <div><h3 style="margin:0 0 4px">Download the phone call data</h3>
+      <p style="margin:0;color:var(--text-2);font-size:13px;line-height:1.6">Every phone call as recorded: ${r.phone.rows.toLocaleString()} calls, ${r.phone.cols.toLocaleString()} columns, same column names and answer codes. Latest call ${esc(r.phone.last)}.</p></div>
+    <button class="mz-export" id="dl-ph">⬇ Download CSV</button></div>` : '');
 }
 function bindDownload(el){
   const a = el.querySelector('#dl-raw');
   if (a) a.onclick = downloadRaw;
+  const b = el.querySelector('#dl-ph'); if (b) b.onclick = downloadPhone;
 }
 function downloadPNG(c){
   const canvas = $('ch-' + c.id), ch = canvas && Chart.getChart(canvas); if (!ch) return;

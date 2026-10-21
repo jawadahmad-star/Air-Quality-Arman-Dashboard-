@@ -43,7 +43,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import dashboard_text as TX
 ROOT = HERE.parent
-DATA_DIR = Path(os.environ["AQP_DATA_DIR"]) if os.environ.get("AQP_DATA_DIR") else ROOT / "Data"
+DATA_DIR = Path(os.environ["AQP_DATA_DIR"]) if os.environ.get("AQP_DATA_DIR") else HERE          # data = the .dta files sitting in this Dashboard folder
 TPL = HERE / "dashboard_template.html"
 OUT = Path(os.environ["AQP_OUT"]) if os.environ.get("AQP_OUT") else HERE / "index.html"
 LOG = HERE / "build_log.txt"
@@ -150,9 +150,9 @@ def _make_key(df):
 def find_sources():
     files = []
     if DATA_DIR.exists():
-        for p in DATA_DIR.rglob("*"):
-            if p.suffix.lower() not in (".csv", ".dta") or "_dummy" in p.parts:
-                continue
+        for p in DATA_DIR.glob("*.dta"):
+            if "call survey" in p.name.lower():
+                continue                       # the phone-call .dta is read separately
             if any(part.lower() in ("media", "attachments") for part in p.relative_to(DATA_DIR).parts[:-1]):
                 continue                       # SurveyCTO media downloads (sensor streams, text audits), not the survey export
             nm = p.name.lower()
@@ -1067,16 +1067,16 @@ conv = pct(N_C, N_ATT)
 # One row per PARENT (a parent called several times counts once; a "Completed" call wins, otherwise the latest call).
 # Parents who could not be interviewed by phone (switched off, not picked, wrong number, refused) are added to the
 # attempts and the non-response; parents already interviewed in the field are never counted twice.
-PHONE_DIR = ROOT / "Data phone survey"
+PHONE_DIR = HERE
 PHONE_FORM = ROOT / "Instrument" / "air_quality_call_survey.xlsx"
 ph_calls = ph_parents = n_ph_nr = n_ph_agreed = n_ph_refused = n_ph_notreached = n_ph_retry = n_ph_final = 0
 ph_disp_n = {}
 ph_school = {}                                                   # school -> phone parents not interviewed {nr, retry, final}
 _nk = lambda x: re.sub(r"\W+", " ", str(x)).upper().strip()
 try:
-    _pf = sorted(PHONE_DIR.glob("*_WIDE.csv"))
+    _pf = sorted(PHONE_DIR.glob("*Call Survey*.dta"))
     if _pf:
-        _p = pd.read_csv(_pf[0], dtype=str, keep_default_na=False, encoding="utf-8-sig")
+        _p = load_file(_pf[0])
         _p["_hh"] = pd.to_numeric(_p["hh_id"], errors="coerce")
         _p["_st"] = pd.to_numeric(_p["status_survey"], errors="coerce")
         _p["_dt"] = pd.to_datetime(_p["starttime"], errors="coerce")
@@ -1224,19 +1224,53 @@ for _h, _g in D.sort_values("_dt").groupby("_hh"):
     _hh_state[int(_h)] = "Completed" if (_g["_status"] == 1).any() else _ST_LAB.get(int(_last) if pd.notna(_last) else 0, "Other")
 _PENDING = ("Partial", "Not reached", "Not visited", "Other")
 _hh_class = D.dropna(subset=["_ckey"]).groupby("_hh")["_ckey"].last().to_dict()          # class each household was sampled from
+# ---- per-school "Parents_Coverage_*.xlsx" sheets (list-checked parent counts): when one sits in this folder its numbers replace the
+# survey-derived class sizes / outcomes for that school: actual parents, complete, and the call outcomes of everyone else
+COV_CLASS, COV_SCHOOL = {}, {}
+cls_schools_all = sorted({_short(_k.split("|")[0]) for _k in UNIVERSE} | {_short(l) for l in SCHOOL_LABEL.values()})
+try:
+    import openpyxl
+    for _cf in sorted(HERE.glob("Parents_Coverage_*.xlsx")):
+        _ws = openpyxl.load_workbook(_cf, data_only=True)["Coverage"]
+        _title = str(_ws["A1"].value or "").split("(EMIS")[0]
+        _tw = set(_nk(_title).split()) - {"GGHS", "GHS", "SCHOOL", "GIRLS", "HIGH", "GOVT", "CDG"}
+        _sn = next((_s for _s in cls_schools_all if len(_tw & set(_nk(_s).split())) >= 2), None)
+        if not _sn:
+            say(f"  ! {_cf.name}: no matching school in the form, skipped")
+            continue
+        _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0}
+        for _r in _ws.iter_rows(min_row=4, values_only=True):
+            if not isinstance(_r[0], (int, float)):
+                break
+            _c = {"actual": _r[5], "complete": _r[6], "refused": _r[7], "off": _r[8], "notpicked": _r[9], "wrong": _r[10], "invalid": _r[11], "sibling": _r[12]}
+            _c = {k: int(v or 0) for k, v in _c.items()}
+            _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]
+            COV_CLASS[(_sn, int(_r[0]))] = _c
+            for k in _tot:
+                _tot[k] += _c[k]
+        COV_SCHOOL[_sn] = _tot
+        say(f"Coverage  : {_sn}: {_tot['actual']} actual parents, {_tot['complete']} complete ({_cf.name})")
+except Exception as e:
+    say(f"  ! coverage sheets skipped: {e!r}")
 class_rows = []
 for _ck in UNIVERSE:
     _g = KIDC[KIDC["_ckey"] == _ck]                      # one record per child interviewed about in this class
     _nd = len(_g)
     _sizes = _g["_tpar"].dropna()
     _size = _class_size(_ck)
+    _cov = COV_CLASS.get((_short(_ck.split("|")[0]), int(_ck.split("|")[1])))
+    if _cov:
+        _size = _cov["actual"]
     _target = _size
     _needed = int(_size * CLASS_THRESHOLD)               # same rule as the form: int(total_parents x threshold)
     _hits = int(np.nansum(_g["_hit"])) if _nd else 0
     _hhs = [h for h, c in _hh_class.items() if c == _ck]
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
     _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
-    if len(_sizes) or HAS_FRAME_CLASS:
+    if _cov:
+        _rem = max(_size - _cov["complete"] - _cov["final"], 0)
+        _refused = _cov["final"]
+    elif len(_sizes) or HAS_FRAME_CLASS:
         _rem = max(_size - _nd - _refused, 0)            # parents of the class with no final outcome yet (refusals can no longer contribute)
     else:
         _rem = sum(1 for x in _states if x in _PENDING)
@@ -1253,7 +1287,7 @@ for _ck in UNIVERSE:
     else:
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
-    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _nd,
+    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _cov["complete"] if _cov else _nd,
                        "size": _size, "needed": _needed, "hits": _hits, "rem": _rem, "refused": _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid"])})
@@ -1275,12 +1309,18 @@ SCHOOL_TARGET = {_short(SCHOOL_LABEL[int(_c)]): int(_n) for _c, _n in CFG.get("s
 for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _short(l) not in cls_schools):                  # every school in the form shows, started or not
     _cr = [r for r in class_rows if r["school"] == _sn]
     _t = SCHOOL_TARGET.get(_sn) or sum(r["target"] for r in _cr)
-    _d = int((C["_sch"].map(_short) == _sn).sum())              # completed interviews (one per parent) in this school, not child records
+    _d = int(sum(1 for _k in KIDC["_ckey"].dropna() if _short(str(_k).split("|")[0]) == _sn))   # completed = children interviewed about (one per child), not parents
     _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
     _reach = _d + _ph["nr"]
+    _cv = COV_SCHOOL.get(_sn)
+    if _cv:                                                      # list-checked sheet: actual parents, complete, and every other outcome
+        _t, _d = _cv["actual"], _cv["complete"]
+        _reach = _cv["actual"]
+        _ph = {"nr": _reach - _d, "retry": _cv["off"] + _cv["notpicked"], "final": _cv["final"]}
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured" if _cr else "Not started yet",
                           "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
-                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0)})
+                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0),
+                          **({"detail": " · ".join(f"{_cv[k]} {l}" for k, l in (("refused", "refused"), ("off", "phone off"), ("notpicked", "not picked"), ("wrong", "wrong number"), ("invalid", "invalid number"), ("sibling", "via sibling")) if _cv[k])} if _cv else {})})
 for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with phone calls but no field interview yet (class sizes not known: no target)
     school_blocks.append({"bin": _sn, "sub": "Phone calls only so far", "done": 0, "target": None, "pct": 0, "status": "In Progress",
                           "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _ph["nr"], "reach_pct": None})
@@ -1294,7 +1334,7 @@ n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       #
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
     K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"All schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
-    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"This school only · {b['pct']:.0f}% of {b['target']:,} parents", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
+    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"This school only · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
     K("🎯", fmt_n(remaining), "Households Remaining",
       (f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
        else f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted"), "navy", "navy"),
@@ -2136,6 +2176,17 @@ if RAW_DOWNLOAD:
     say(f"Raw data  : {RAW['rows']} submission(s) x {RAW['cols']} columns, {len(_csv) / 1048576:.1f} MB CSV "
         f"({'all columns, nothing removed' if RAW_INCLUDE_PII else 'identifier columns removed'})")
     overview["blocks"].insert(2, {"t": "download"})
+    # phone-call data, straight from its .dta (all calls, all columns), as a second download
+    RAW_PH = None
+    _pdta = next(iter(sorted(PHONE_DIR.glob("*Call Survey*.dta"))), None)
+    if _pdta:
+        _pd_ = load_file(_pdta)
+        _pk = [c for c in _pd_.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+        _pcsv = _pd_[_pk].rename(columns=lambda c: ORIG_NAMES.get(c, c)).to_csv(index=False)
+        _plast = _pd_["starttime"].replace("", np.nan).dropna().max() if "starttime" in _pd_ else ""
+        RAW_PH = {"name": f"AirQuality_phone_calls_{datetime.now().strftime('%Y-%m-%d')}.csv", "csv": _pcsv,
+                  "rows": int(len(_pd_)), "cols": len(_pk), "last": str(_plast)[:16] if _plast else "-"}
+        say(f"Phone data: {RAW_PH['rows']} call(s) x {RAW_PH['cols']} columns from {_pdta.name}")
 for _r in qa_rows:
     if _r["n"]:
         say(f"  check: {_r['name']}: {_r['n']} record(s)")
@@ -2210,6 +2261,8 @@ _bad = re.findall(r"\b03\d{9}\b|\b\+?92\d{10}\b|[\w.]+@[\w.]+\.\w+", payload)
 _bad = [b for b in _bad if "example" not in b]
 if _bad:
     sys.exit(f"PII pattern found in payload ({_bad[:3]}...): build stopped.")
+if RAW and RAW_PH:
+    RAW["phone"] = RAW_PH
 if RAW:                                                  # the downloadable file is added after the aggregate scan (it is the export itself)
     DATA["raw"] = RAW
     payload = json.dumps(clean(DATA), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
