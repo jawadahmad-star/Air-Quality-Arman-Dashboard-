@@ -763,7 +763,8 @@ function blocksHTML(rows){
     const pa = hasT && r.att ? Math.min(100 - p, Math.round(100 * r.att / r.target)) : 0;
     const ext = r.att != null ? `<div class="lc-sub" style="margin-top:6px"><strong>${r.att.toLocaleString()}</strong> more not interviewed (${r.detail ? esc(r.detail) : r.retry + ' to call again · ' + r.final + ' refused / wrong number'})<br><strong>${r.reach.toLocaleString()}</strong> children reached in all${hasT ? ` · ${r.reach_pct}% of ${r.target.toLocaleString()}` : ''}</div>` : '';
     return `<div class="land-card"><div class="lc-bin">${esc(r.bin)}</div><div class="lc-sub">${esc(r.sub||'')}</div>
-      <div class="lc-frac">${r.done.toLocaleString()} <span class="lc-tgt">${hasT ? '/ ' + r.target.toLocaleString() + ' completed' : 'completed'}</span></div>
+      <div class="lc-frac">${r.done.toLocaleString()} <span class="lc-tgt">${hasT ? '/ ' + r.target.toLocaleString() + ' children completed' : 'children completed'}</span></div>
+      ${r.par != null && r.done ? `<div class="lc-sub"><strong>${r.done.toLocaleString()}</strong> children from <strong>${r.par.toLocaleString()}</strong> unique parents. A parent with 2 or 3 children is counted once for each child, so the children are not unique parents.</div>` : ''}
       <div class="lc-track"><span style="width:${p}%;background:${c}"></span>${pa ? `<span style="width:${pa}%;background:${c};opacity:.35"></span>` : ''}</div>
       <div class="lc-foot"><span class="lc-pct" style="color:${c}">${hasT ? r.pct + '%' : '—'}</span>${badge(r.status)}</div>${ext}</div>`;
   }).join('') + `</div>`;

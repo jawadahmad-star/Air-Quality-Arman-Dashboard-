@@ -640,7 +640,41 @@ if N_UNMATCHED:
     say(f"  ! Class match: {N_UNMATCHED} child record(s) could not be matched to a planned class (grade or section missing / not in the plan) - not counted in any class")
 
 
+_nkc = lambda x: re.sub(r"\W+", " ", str(x)).upper().strip()
+# ---- per-school "Parents_Coverage_*.xlsx" sheets (list-checked parent counts): when one sits in this folder its numbers replace the
+# survey-derived class sizes / outcomes for that school: actual parents, complete, and the call outcomes of everyone else
+COV_CLASS, COV_SCHOOL = {}, {}
+cls_schools_all = sorted({_short(_k.split("|")[0]) for _k in UNIVERSE} | {_short(l) for l in SCHOOL_LABEL.values()})
+try:
+    import openpyxl
+    for _cf in sorted(HERE.glob("Parents_Coverage_*.xlsx")):
+        _ws = openpyxl.load_workbook(_cf, data_only=True)["Coverage"]
+        _title = str(_ws["A1"].value or "").split("(EMIS")[0]
+        _tw = set(_nkc(_title).split()) - {"GGHS", "GHS", "SCHOOL", "GIRLS", "HIGH", "GOVT", "CDG"}
+        _sn = next((_s for _s in cls_schools_all if len(_tw & set(_nkc(_s).split())) >= 2), None)
+        if not _sn:
+            say(f"  ! {_cf.name}: no matching school in the form, skipped")
+            continue
+        _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0}
+        for _r in _ws.iter_rows(min_row=4, values_only=True):
+            if not isinstance(_r[0], (int, float)):
+                break
+            _c = {"actual": _r[5], "complete": _r[6], "refused": _r[7], "off": _r[8], "notpicked": _r[9], "wrong": _r[10], "invalid": _r[11], "sibling": _r[12]}
+            _c = {k: int(v or 0) for k, v in _c.items()}
+            _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]
+            COV_CLASS[(_sn, int(_r[0]))] = _c
+            for k in _tot:
+                _tot[k] += _c[k]
+        COV_SCHOOL[_sn] = _tot
+        say(f"Coverage  : {_sn}: {_tot['actual']} actual parents, {_tot['complete']} complete ({_cf.name})")
+except Exception as e:
+    say(f"  ! coverage sheets skipped: {e!r}")
+
+
 def _class_size(ck):
+    _cv = COV_CLASS.get((_short(str(ck).split("|")[0]), int(str(ck).split("|")[1])))
+    if _cv:                                              # list-checked sheet: actual parents in the class
+        return _cv["actual"]
     _s = KIDC.loc[KIDC["_ckey"] == ck, "_tpar"].dropna()
     if len(_s):
         return int(_s.median())
@@ -1137,6 +1171,9 @@ N_ATT_ALL = N_ATT + n_ph_nr                                     # field visits o
 conv_all = pct(N_C, N_ATT_ALL)
 n_covered = N_C + n_ph_nr                                       # parents interviewed + parents tried by phone without success
 remaining = max(N_TARGET - n_covered, 0)                        # households still open: interviewed, or already tried by phone without success, are taken off
+COV_EXTRA = sum(v["actual"] - v["complete"] for v in COV_SCHOOL.values())    # children of closed-out schools reached but not interviewed (refused, wrong number, phone off ...)
+if COV_SCHOOL:                                                  # target is counted in children (class lists), so take off the children interviewed + the ones reached without an interview
+    remaining = max(N_TARGET - len(KIDC) - COV_EXTRA - n_ph_nr, 0)
 days_left = math.ceil(remaining / per_day) if per_day and remaining else 0
 proj_finish = next_workdays(last_ts, days_left)[-1] if (n_field_days and days_left) else last_ts
 
@@ -1224,34 +1261,6 @@ for _h, _g in D.sort_values("_dt").groupby("_hh"):
     _hh_state[int(_h)] = "Completed" if (_g["_status"] == 1).any() else _ST_LAB.get(int(_last) if pd.notna(_last) else 0, "Other")
 _PENDING = ("Partial", "Not reached", "Not visited", "Other")
 _hh_class = D.dropna(subset=["_ckey"]).groupby("_hh")["_ckey"].last().to_dict()          # class each household was sampled from
-# ---- per-school "Parents_Coverage_*.xlsx" sheets (list-checked parent counts): when one sits in this folder its numbers replace the
-# survey-derived class sizes / outcomes for that school: actual parents, complete, and the call outcomes of everyone else
-COV_CLASS, COV_SCHOOL = {}, {}
-cls_schools_all = sorted({_short(_k.split("|")[0]) for _k in UNIVERSE} | {_short(l) for l in SCHOOL_LABEL.values()})
-try:
-    import openpyxl
-    for _cf in sorted(HERE.glob("Parents_Coverage_*.xlsx")):
-        _ws = openpyxl.load_workbook(_cf, data_only=True)["Coverage"]
-        _title = str(_ws["A1"].value or "").split("(EMIS")[0]
-        _tw = set(_nk(_title).split()) - {"GGHS", "GHS", "SCHOOL", "GIRLS", "HIGH", "GOVT", "CDG"}
-        _sn = next((_s for _s in cls_schools_all if len(_tw & set(_nk(_s).split())) >= 2), None)
-        if not _sn:
-            say(f"  ! {_cf.name}: no matching school in the form, skipped")
-            continue
-        _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0}
-        for _r in _ws.iter_rows(min_row=4, values_only=True):
-            if not isinstance(_r[0], (int, float)):
-                break
-            _c = {"actual": _r[5], "complete": _r[6], "refused": _r[7], "off": _r[8], "notpicked": _r[9], "wrong": _r[10], "invalid": _r[11], "sibling": _r[12]}
-            _c = {k: int(v or 0) for k, v in _c.items()}
-            _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]
-            COV_CLASS[(_sn, int(_r[0]))] = _c
-            for k in _tot:
-                _tot[k] += _c[k]
-        COV_SCHOOL[_sn] = _tot
-        say(f"Coverage  : {_sn}: {_tot['actual']} actual parents, {_tot['complete']} complete ({_cf.name})")
-except Exception as e:
-    say(f"  ! coverage sheets skipped: {e!r}")
 class_rows = []
 for _ck in UNIVERSE:
     _g = KIDC[KIDC["_ckey"] == _ck]                      # one record per child interviewed about in this class
@@ -1310,6 +1319,7 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
     _cr = [r for r in class_rows if r["school"] == _sn]
     _t = SCHOOL_TARGET.get(_sn) or sum(r["target"] for r in _cr)
     _d = int(sum(1 for _k in KIDC["_ckey"].dropna() if _short(str(_k).split("|")[0]) == _sn))   # completed = children interviewed about (one per child), not parents
+    _par = int((C["_sch"].map(_short) == _sn).sum())             # unique parents interviewed in this school (one survey per parent)
     _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
     _reach = _d + _ph["nr"]
     _cv = COV_SCHOOL.get(_sn)
@@ -1319,7 +1329,7 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
         _ph = {"nr": _reach - _d, "retry": _cv["off"] + _cv["notpicked"], "final": _cv["final"]}
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured" if _cr else "Not started yet",
                           "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
-                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0),
+                          "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0), "par": _par,
                           **({"detail": " · ".join(f"{_cv[k]} {l}" for k, l in (("refused", "refused"), ("off", "phone off"), ("notpicked", "not picked"), ("wrong", "wrong number"), ("invalid", "invalid number"), ("sibling", "via sibling")) if _cv[k])} if _cv else {})})
 for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with phone calls but no field interview yet (class sizes not known: no target)
     school_blocks.append({"bin": _sn, "sub": "Phone calls only so far", "done": 0, "target": None, "pct": 0, "status": "In Progress",
@@ -1334,9 +1344,10 @@ n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       #
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
     K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"Parents interviewed, all schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target · {len(KIDC):,} children covered (a parent with children in two classes counts in each class)", "up", "green"),
-    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"Children interviewed about in this school · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
+    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"{b['par']} unique parents · children counted once per child, so a parent with 2-3 children is counted 2-3 times · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
     K("🎯", fmt_n(remaining), "Households Remaining",
-      (f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
+      (f"{N_TARGET:,} children in the classes − {len(KIDC):,} interviewed − {COV_EXTRA} reached but not interviewed ({', '.join(COV_SCHOOL)}: refused, wrong number, phone off, not picked up) = {remaining:,} still to reach" if COV_SCHOOL else
+       f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
        else f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted"), "navy", "navy"),
     K("🏁", f"{n_cls_done} / {n_cls}", "Classes Finished", f"Every parent interviewed or has a final outcome · {n_cls_80} more with 5 or fewer left", "up", "teal"),
     K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"{PCTS} of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
