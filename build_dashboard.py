@@ -1333,8 +1333,8 @@ say("School progress: " + " | ".join(f"{b['bin']} {b['done']}/{b['target']}" for
 n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
 ov_kpis = [
-    K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"All schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target", "up", "green"),
-    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"This school only · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
+    K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"Parents interviewed, all schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target · {len(KIDC):,} children covered (a parent with children in two classes counts in each class)", "up", "green"),
+    *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"Children interviewed about in this school · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
     K("🎯", fmt_n(remaining), "Households Remaining",
       (f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
        else f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted"), "navy", "navy"),
