@@ -2117,13 +2117,18 @@ PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
 RAW = None
 if RAW_DOWNLOAD:
     _last = RAW_DF["starttime"].replace("", np.nan).dropna().max() if "starttime" in RAW_DF else ""
-    if csv_path and RAW_INCLUDE_PII and (not dta_path or not recon.get("only_dta")):
+    if csv_path and RAW_INCLUDE_PII and not (dta_path and PREFER == "dta"):
         # the SurveyCTO CSV itself, every column and row untouched (also when a .dta sits beside it, unless the .dta holds extra submissions)
         _csv = csv_path.read_text(encoding="utf-8-sig")
         _ncols = len(pd.read_csv(csv_path, dtype=str, nrows=0, encoding="utf-8-sig").columns)
     else:
-        _keep = [c for c in RAW_DF.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
-        _raw_out = RAW_DF[_keep].rename(columns=lambda c: ORIG_NAMES.get(c, c))
+        _src = RAW_DF
+        if dta_path and PREFER == "dta":                # download = the .dta exactly (its rows, its columns, its corrected values)
+            _src = RAW_DF[RAW_DF["_key"].isin(dta_df["_key"])]
+            _keep = [c for c in dta_df.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+        else:
+            _keep = [c for c in RAW_DF.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+        _raw_out = _src[_keep].rename(columns=lambda c: ORIG_NAMES.get(c, c))
         _csv = _raw_out.to_csv(index=False)
         _ncols = _raw_out.shape[1]
     RAW = {"name": f"AirQuality_field_data_{datetime.now().strftime('%Y-%m-%d')}.csv", "csv": _csv,
