@@ -2104,13 +2104,6 @@ if PH["calls"]:
             {"t": "grid", "cols": 2, "cards": [
                 card("hbar", "phOut", "Phone Call Outcome", "Final outcome per parent (a parent called several times counts once; an agreed call wins, otherwise the latest call)", {"items": _ph_dist, "base": PH["nr"]}, opt={"color": 2, "fmt": "n"}),
                 card("bar", "phDay", "Calls per Day", "Phone calls made on each day", {"items": [{"l": x["l"], "n": x["n"], "p": pct(x["n"], max(PH["calls"], 1))} for x in _ph_day], "base": PH["calls"]}, opt={"color": 1, "fmt": "n"})]},
-            {"t": "grid", "cols": 1, "cards": [
-                card("table", "phSch", "Unsuccessful Calls by School", "Parents not interviewed by phone, by school",
-                     {"cols": [{"k": "sc", "l": "School"}, {"k": "nr", "l": "Not interviewed", "num": True}, {"k": "retry", "l": "To call again", "num": True}, {"k": "final", "l": "No further call", "num": True}], "rows": _ph_sch}, full=True, opt={"sortKey": "nr"}),
-                card("table", "phEnum", "Calls by Enumerator", "Calls made and parents who agreed, by team member",
-                     {"cols": [{"k": "e", "l": "Enumerator"}, {"k": "calls", "l": "Calls", "num": True}, {"k": "parents", "l": "Parents", "num": True}, {"k": "ok", "l": "Agreed", "num": True}], "rows": _ph_en}, full=True, opt={"sortKey": "calls"}),
-                card("table", "phLog", "Call Log", "One row per call, newest first. No names or phone numbers are shown.",
-                     {"cols": [{"k": "d", "l": "Date"}, {"k": "e", "l": "Enumerator"}, {"k": "sc", "l": "School"}, {"k": "cl", "l": "Class"}, {"k": "n", "l": "Call no.", "num": True}, {"k": "o", "l": "Outcome"}], "rows": PH["rows"]}, full=True, opt={"sortKey": "d"})]},
     ]
 
 # ---- tabs removed on request (Field Ops, Fairness, Patience)
