@@ -513,6 +513,143 @@ D["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.na
 D["_cls"] = D["_ckey"].map(lambda k: _cls_label(k) if pd.notna(k) else np.nan)
 D["_row"] = np.arange(len(D))
 
+# ---- typed class lists (<project>/New folder/<school>/Typed_Lists/CLASS 4A.xlsx ...): where a school has them, the list decides
+# which section each child is in (the enumerator's class / section and the typed grade are often wrong). PII stays local: only the
+# resulting class counts reach index.html.
+_lnm = lambda x: re.sub(r"\s+", " ", re.sub(r"[^a-z ]", " ", str(x).lower())).strip()
+_ldig = lambda x: re.sub(r"\D", "", str(x))[-10:]
+LIST_ROWS, LIST_SIZE, LIST_CLASSES = {}, {}, {}           # school label -> [(name, father, grade, sec)] / (school label, grade, sec) -> rows / school label -> {(grade, sec)}
+try:
+    for _td in sorted(HERE.parent.glob("*/*/Typed_Lists")):
+        _tw = {w for w in re.sub(r"[^a-z0-9 ]", " ", _td.parent.name.lower().replace("_", " ")).split() if not w.isdigit() and w not in ("emis", "gghs", "ghs", "school", "girls", "high", "govt", "cdg", "newly", "upgraded")}
+        _lab = next((l for l in SCHOOL_LABEL.values() if len(_tw & set(re.sub(r"[^a-z0-9 ]", " ", l.lower()).split())) >= 2), None)
+        if not _lab:
+            continue
+        for _xf in sorted(_td.glob("CLASS *.xlsx")):
+            _m = re.search(r"CLASS\s*(\d+)\s*([A-Z]?)", _xf.stem, flags=re.I)
+            _raw_l = pd.read_excel(_xf, header=None)
+            _hr = next((i for i in range(min(8, len(_raw_l))) if any("student name" in str(v).lower() for v in _raw_l.iloc[i])), None)
+            if not _m or _hr is None:
+                continue
+            _hd = [str(v).strip().lower() for v in _raw_l.iloc[_hr]]
+            _cn, _cf = _hd.index("student name"), (_hd.index("father name") if "father name" in _hd else None)
+            _cp = [i_ for i_, h_ in enumerate(_hd) if h_.startswith("phone")]
+            for _, _lr in _raw_l.iloc[_hr + 1:].iterrows():
+                if pd.isna(_lr.iloc[_cn]) or not _lnm(_lr.iloc[_cn]):
+                    continue
+                LIST_ROWS.setdefault(_lab, []).append((_lnm(_lr.iloc[_cn]), _lnm(_lr.iloc[_cf]) if _cf is not None else "", int(_m.group(1)), _m.group(2).upper(), {_ldig(_lr.iloc[i_]) for i_ in _cp if len(_ldig(_lr.iloc[i_])) == 10}))
+        for _r_ in LIST_ROWS.get(_lab, []):
+            LIST_SIZE[(_lab, _r_[2], _r_[3])] = LIST_SIZE.get((_lab, _r_[2], _r_[3]), 0) + 1
+            LIST_CLASSES.setdefault(_lab, set()).add((_r_[2], _r_[3]))
+        say(f"Class lists: {_lab}: {len(LIST_ROWS.get(_lab, []))} children in {len(LIST_CLASSES.get(_lab, ()))} sections ({_td.parent.name})")
+except Exception as e:
+    say(f"  ! typed class lists skipped: {e!r}")
+
+
+_LSTOP = {"m", "md", "muhammad", "mohammad", "muhammed", "mohd", "bibi", "begum", "nan", "khan"}
+_lrat = lambda a, b: difflib.SequenceMatcher(None, a, b).ratio()
+_ltok = lambda x: [t for t in x.split() if t not in _LSTOP]
+
+
+def _lscore(n, parent, row):
+    """how well a typed-list row fits the child: name (also with the father's name written after it) + family evidence"""
+    nm, fa = row[0], row[1]
+    tn, tl, tf, tp = _ltok(n), _ltok(nm), _ltok(fa), _ltok(parent)
+    sim = max(_lrat(n, nm), _lrat(n, nm + " " + fa),
+              0.9 if (min(len(n.split()), len(nm.split())) >= 2 and (set(n.split()) <= set(nm.split()) or set(nm.split()) <= set(n.split()))) else 0)
+    fam = any(any(_lrat(t, b_) >= 0.8 for b_ in tl[1:] + tf) for t in tn[1:] + tp)
+    if sim < 0.85 and tn and tl and _lrat(tn[0], tl[0]) >= 0.8 and fam:
+        sim = 0.85
+    return sim + (0.1 if fam and sim >= 0.85 else 0)
+
+
+def _list_match(sch, name, parent, gtxt, phones=(), hint=None, sib=""):
+    """(grade, section) of the child in the typed list of its school, or None when not found / ambiguous.
+    Parent phone + child name first, then name + family, then the typed grade / enumerator's class to break ties."""
+    rows, n, parent = LIST_ROWS.get(sch), _lnm(name), _lnm(parent)
+    if not rows or not n:
+        return None
+    pg = [r for r in rows if r[4] & set(phones)] if phones else []
+    if pg:
+        ps = sorted(((max(_lrat(n, r[0]), _lrat(n.split()[0], r[0].split()[0]) if r[0] else 0), r) for r in pg), key=lambda x: -x[0])
+        if ps[0][0] >= 0.7 and (len(ps) == 1 or ps[0][0] > ps[1][0] + 0.05 or ps[0][1][2:4] == ps[1][1][2:4]):
+            return ps[0][1][2:4]
+    sc = [(_lscore(n, parent, r), r) for r in rows]
+    best = max(s_ for s_, _ in sc)
+    if best >= 0.85:
+        cand = [r for s_, r in sc if s_ >= best - 0.01]
+        if len({r[2:4] for r in cand}) > 1:
+            g_ = _grade_of(gtxt)
+            cand = [r for r in cand if r[2] == g_] or cand
+        if len({r[2:4] for r in cand}) > 1 and hint:
+            cand = [r for r in cand if r[2:4] == hint] or cand
+        if len({r[2:4] for r in cand}) == 1:
+            return cand[0][2:4]
+    # not found by name: an explicit "6th B" typed by the enumerator, if that section exists in the school's list
+    t_ = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", str(gtxt), flags=re.I)
+    m_ = re.fullmatch(r"\s*(\d+)\s*[-_ ]?\s*([A-Za-z])\s*", t_)
+    if m_ and (int(m_.group(1)), m_.group(2).upper()) in LIST_CLASSES.get(sch, ()):
+        return (int(m_.group(1)), m_.group(2).upper())
+    # looser, within the class the enumerator named (typed grade, else the class selected at the start of the survey), looking at
+    # all its sections: first name roughly the same (spelling is hand-copied) + the surname / father's name / mother's surname fits
+    tn = _ltok(n)
+    for g_ in dict.fromkeys([x for x in (_grade_of(gtxt), hint[0] if hint else np.nan) if x in STUDY_GRADES]):
+        fit = []
+        for r in rows:
+            if r[2] != g_ or not tn:
+                continue
+            tl, tf, tp = _ltok(r[0]), _ltok(r[1]), _ltok(parent + " " + sib)      # sib: the other children's names (a surname the parent did not give)
+            f_ = _lrat(tn[0], tl[0]) if tl else 0
+            fam = any(any(_lrat(t, b_) >= 0.75 for b_ in tl[1:] + tf) for t in tn[1:] + tp)
+            if f_ >= 0.7 and fam:
+                fit.append((f_, r))
+        if fit:
+            top = max(f for f, _ in fit)
+            c_ = {r[2:4] for f, r in fit if f >= top - 0.05}
+            if len(c_) == 1:
+                return next(iter(c_))
+    # still nothing: the class and section the enumerator selected for this sampled child
+    if hint and hint in LIST_CLASSES.get(sch, ()):
+        return hint
+    return None
+
+
+LIST_MATCH = {}                                           # (row, child no.) -> (grade, section)
+LIST_MISS = []                                            # children of a list school who are not in its list
+if LIST_ROWS:
+    _lpar = (D["fname"].fillna("").astype(str) + " " + D["lname"].fillna("").astype(str)) if "fname" in D else pd.Series("", index=D.index)
+    for _i in range(len(D)):
+        _lab = D["_sch"].iat[_i]
+        if _lab not in LIST_ROWS:
+            continue
+        for _k in range(0, 21):
+            _sf = f"_{_k}" if _k else ""
+            if f"name_child{_sf}" not in D.columns:
+                continue
+            _nmv = D[f"name_child{_sf}"].iat[_i]
+            if not _lnm(_nmv):
+                continue
+            _gt = D[f"grade_child{_sf}"].iat[_i] if f"grade_child{_sf}" in D.columns else ""
+            _ph = {_ldig(D[c_].iat[_i]) for c_ in ("phone_mobile", "mobile_number") if c_ in D.columns}
+            _hint = (int(D["_gradeN"].iat[_i]), str(D["_sec"].iat[_i]).strip().upper()) if pd.notna(D["_gradeN"].iat[_i]) else None
+            _mt = _list_match(_lab, _nmv, _lpar.iat[_i], _gt, _ph, _hint if _k <= 1 else None,
+                             " ".join(_lnm(D[f"name_child_{j_}"].iat[_i]) for j_ in range(1, 21) if j_ != _k and f"name_child_{j_}" in D.columns))   # the enumerator's class is the sampled (first) child's
+            if _mt:
+                LIST_MATCH[(_i, _k or 1)] = _mt
+            else:
+                LIST_MISS.append((int(D["_hh"].iat[_i]) if pd.notna(D["_hh"].iat[_i]) else None, str(_nmv)))
+    # household-level class: the child in the sampled class if there is one, else the first listed child
+    for _i in range(len(D)):
+        _ms = [LIST_MATCH[(_i, _k)] for _k in range(1, 21) if (_i, _k) in LIST_MATCH]
+        if not _ms or D["_sch"].iat[_i] not in LIST_ROWS:
+            continue
+        _hit = next((m_ for m_ in _ms if m_[0] == D["_gradeN"].iat[_i]), _ms[0])
+        D.iat[_i, D.columns.get_loc("_gradeN")] = float(_hit[0])
+        D.iat[_i, D.columns.get_loc("_sec")] = _hit[1]
+    D["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(D["_sch"], D["_gradeN"], D["_sec"])]
+    D["_cls"] = D["_ckey"].map(lambda k: _cls_label(k) if pd.notna(k) else np.nan)
+    say(f"Class lists: {len(LIST_MATCH)} child record(s) placed in their section from the typed lists, {len(LIST_MISS)} not found in a list (not counted in any class), hh_id: {[h_ for h_, _ in LIST_MISS]}")
+
 # ---- repeat group: a wide export carries the per-child fields as <name>_1, <name>_2 ...
 K_MAX = 0
 for _k in range(1, 21):
@@ -580,6 +717,16 @@ for _s_, _g_, _x_ in zip(pd.concat([D["_sch"], KID["_sch"]]), pd.concat([D["_gra
 KID["_sec"] = [(next(iter(_known_secs[(a_, b_)])) if (not str(c_).strip() and (a_, b_) in _known_secs and len(_known_secs[(a_, b_)]) == 1) else c_)
                for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
 KID["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
+if LIST_ROWS:                                             # typed lists decide the class of every child in their schools
+    _kg, _ks = [], []
+    for _r_, _k_, _s_, _g_, _x_ in zip(KID["_row"], KID["_k"], KID["_sch"], KID["_gradeN"], KID["_sec"]):
+        if _s_ in LIST_ROWS:
+            _mt = LIST_MATCH.get((int(_r_), int(_k_)))
+            _kg.append(float(_mt[0]) if _mt else np.nan); _ks.append(_mt[1] if _mt else "")
+        else:
+            _kg.append(_g_); _ks.append(_x_)
+    KID["_gradeN"], KID["_sec"] = _kg, _ks
+    KID["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(KID["_sch"], KID["_gradeN"], KID["_sec"])]
 _ok_k = KID["_rand"].notna() & KID["_bid"].notna()
 KID["_hit"] = np.where(_ok_k, (KID["_rand"] <= KID["_bid"]).astype(float), np.nan)
 KID["_pclear"] = np.where(KID["_bid"].notna(), (KID["_bid"].clip(0, CAP) + 1) / (CAP + 1.0), np.nan)
@@ -672,6 +819,9 @@ except Exception as e:
 
 
 def _class_size(ck):
+    _ls = LIST_SIZE.get((str(ck).split("|")[0], int(str(ck).split("|")[1]), str(ck).split("|")[2]))
+    if _ls:                                              # typed class list: its rows are the parents of the section
+        return _ls
     _cv = COV_CLASS.get((_short(str(ck).split("|")[0]), int(str(ck).split("|")[1])))
     if _cv:                                              # list-checked sheet: actual parents in the class
         return _cv["actual"]
@@ -1315,6 +1465,8 @@ share_pos = sh(wtp_all, lambda s: s > 0)
 school_blocks = []
 _ph_by_key = {_nk(k): (k, v) for k, v in ph_school.items() if k}
 SCHOOL_TARGET = {_short(SCHOOL_LABEL[int(_c)]): int(_n) for _c, _n in CFG.get("school_targets", {}).items() if int(_c) in SCHOOL_LABEL}   # parents per school, from the school list
+for _lab_ in LIST_ROWS:                                       # schools with typed lists: the target is the list itself
+    SCHOOL_TARGET[_short(_lab_)] = len(LIST_ROWS[_lab_])
 for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _short(l) not in cls_schools):                  # every school in the form shows, started or not
     _cr = [r for r in class_rows if r["school"] == _sn]
     _t = SCHOOL_TARGET.get(_sn) or sum(r["target"] for r in _cr)
