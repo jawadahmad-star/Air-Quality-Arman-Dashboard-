@@ -805,7 +805,10 @@ function tableCardHTML(c, d){
   if (o.filterKey && st.f && st.f !== 'All') rows = rows.filter(r => r[o.filterKey] === st.f);
   if (st.key && !o.noSort) rows.sort((a, b) => { const x = cellV(a[st.key]), y = cellV(b[st.key]); return (typeof x === 'string' ? String(x).localeCompare(y) : ((x == null ? -1e18 : x) - (y == null ? -1e18 : y))) * st.dir; });
   const filt = o.filterKey ? `<div class="tbl-filter">${o.filterVals.map(v => `<button class="seg-chip${v === st.f ? ' on' : ''}" data-tf="${esc(v)}">${esc(v)}</button>`).join('')}</div>` : '';
-  const head = d.cols.map(cl => `<th class="${cl.num ? 'num' : ''}${o.noSort ? ' nosort' : ''}" data-k="${cl.k}">${esc(cl.l)}${st.key === cl.k ? `<span class="arrow">${st.dir === 1 ? '▲' : '▼'}</span>` : ''}</th>`).join('');
+  // header labels may carry {R}: the class rule of the rows on screen (one value when a single rule applies, otherwise "30% / 40%")
+  const ruleTxt = (() => { const u = [...new Set(rows.map(r => r.rule && r.rule.v).filter(v => v != null))].sort((x, y) => x - y); return u.length ? u.map(v => v + '%').join(' / ') : ''; })();
+  const colLab = cl => String(cl.l).replace('{R}', ruleTxt).replace(' ()', '');
+  const head = d.cols.map(cl => `<th class="${cl.num ? 'num' : ''}${o.noSort ? ' nosort' : ''}" data-k="${cl.k}">${esc(colLab(cl))}${st.key === cl.k ? `<span class="arrow">${st.dir === 1 ? '▲' : '▼'}</span>` : ''}</th>`).join('');
   const body = rows.map(r => '<tr>' + d.cols.map(cl => {
     const x = r[cl.k], t = cellT(x);
     if (cl.flags) return `<td class="left">${(t && t.length) ? t.map(f => `<span class="pill-flag">${esc(f)}</span>`).join('') : '<span class="badge badge-green">✓ none</span>'}</td>`;

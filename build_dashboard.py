@@ -1591,8 +1591,8 @@ _cls_sorted = sorted(class_rows, key=lambda r: (-(r["hits"] / r["needed"] if r["
 _pill = lambda k: {"v": {"Secured": 4, "On track": 3, "At risk": 2, "Cannot reach": 1, "Not started": 0}[k], "t": k, "tone": CLS_TONE[k]}
 cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "rule", "l": "Rule", "num": True}, {"k": "size", "l": "Class size", "num": True},
                       {"k": "done", "l": "Interviewed", "num": True}, {"k": "pend", "l": "Still to do", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
-                      {"k": "need", "l": f"Needed ({PCTM_SHORT})", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
-                      {"k": "chance", "l": "Chance of reaching the rule", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
+                      {"k": "need", "l": "Needed ({R})", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
+                      {"k": "chance", "l": "Chance of reaching {R}", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
              "rows": [{"school": r["school"], "rule": {"v": r["thr"], "t": f"{r['thr']}%"}, "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
                        "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "pend": r["rem"], "hits": r["hits"], "need": r["needed"],
                        "rate": {"v": round(r["rate"], 1), "t": f"{r['rate']:.0f}%"}, "chance": {"v": round(100 * r["chance"], 1), "t": f"{100 * r['chance']:.0f}%"},
