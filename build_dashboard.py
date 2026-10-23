@@ -293,7 +293,9 @@ _m = re.search(r"\*\s*(0?\.\d+)", _thr_src)
 if _m:
     CLASS_THRESHOLD = float(_m.group(1))
 THR_PCT = int(round(100 * CLASS_THRESHOLD))
-PCTS = f"{THR_PCT}%"                                            # e.g. "40%": used in every class-rule label
+PCTS = f"{THR_PCT}%"                                            # e.g. "30%": used in every class-rule label
+# schools finished under the earlier 40% protocol keep 40%; every later school uses the form's rule (config "school_thresholds": {school_list code: share})
+SCHOOL_THR = {int(k): float(v) for k, v in (CFG.get("school_thresholds") or {}).items()}
 _m = re.search(r"<=\s*(\d+)", _form_attr("contribute_will", "constraint"))
 CAP = int(_m.group(1)) if _m else 2000                          # highest bid / random price
 CAPS = f"{CAP:,}"
@@ -427,6 +429,7 @@ D = D.copy()
 
 # ---- school and class of each household: from the frame, else from what the enumerator typed
 _short = lambda x: re.sub(r"^(govt\.?|government)\s+", "", str(x).strip(), flags=re.I)
+SCHOOL_THR_BY_NAME = {_short(SCHOOL_LABEL[c]): t for c, t in SCHOOL_THR.items() if c in SCHOOL_LABEL and abs(t - CLASS_THRESHOLD) > 1e-9}
 
 
 def _norm_school_names(series):
@@ -1421,7 +1424,8 @@ for _ck in UNIVERSE:
     if _cov:
         _size = _cov["actual"]
     _target = _size
-    _needed = int(_size * CLASS_THRESHOLD)               # same rule as the form: int(total_parents x threshold)
+    _thr = SCHOOL_THR_BY_NAME.get(_short(_ck.split("|")[0]), CLASS_THRESHOLD)
+    _needed = int(_size * _thr)                          # same rule as the form: int(total_parents x threshold)
     _hits = int(np.nansum(_g["_hit"])) if _nd else 0
     _hhs = [h for h, c in _hh_class.items() if c == _ck]
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
@@ -1447,11 +1451,14 @@ for _ck in UNIVERSE:
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
     class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _cov["complete"] if _cov else _nd,
-                       "size": _size, "needed": _needed, "hits": _hits, "rem": _rem, "refused": _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
+                       "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid"])})
 class_rows.sort(key=lambda r: (r["school"], r["grade"], r["sec"]))
 CLS_LABEL = {r["key"]: r["label"] for r in class_rows}
+for _r in class_rows:
+    if _r["done"] or _r["hits"]:
+        say(f"  class: {_r['label']}: size {_r['size']} · rule {_r['thr']}% -> need {_r['needed']} · contributing {_r['hits']} · interviewed {_r['done']} · {_r['status']}")
 n_cls = len(class_rows)
 cls_n = {k: sum(1 for r in class_rows if r["status"] == k) for k in CLS_COLOR}
 cls_expected = sum(r["chance"] for r in class_rows)
@@ -1588,7 +1595,7 @@ cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}
              "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above {PCTS}. A class can still change until every parent is interviewed."}
 _prog = lambda r: 100.0 * r["hits"] / r["needed"] if r["needed"] else 0.0            # contributors so far as a share of the number needed
 cls_bars = {"items": [{"l": r["label"], "v": round(_prog(r), 1), "p": round(_prog(r), 1), "n": r["hits"], "lab": f"{r['hits']} of {r['needed']}", "slot": CLS_COLOR[r["status"]],
-                       "tip": f"{r['hits']} contributing, {r['needed']} needed ({PCTS} of {r['size']}) · {r['done']} of {r['target']} interviewed, {r['rem']} still to do · {r['status']}"} for r in _cls_sorted],
+                       "tip": f"{r['hits']} contributing, {r['needed']} needed ({r['thr']}% of {r['size']}) · {r['done']} of {r['target']} interviewed, {r['rem']} still to do · {r['status']}"} for r in _cls_sorted],
             "base": None}
 if _cls_sorted:
     _near = [r for r in _cls_sorted if r["status"] in ("On track", "At risk")]
@@ -1643,7 +1650,8 @@ PANELS.append({
         {"t": "grid", "cols": 1, "cards": [
             card("table", "clTable", "Every class, one line each", f"Click a column to sort, or filter by school. “Chance” is the probability of reaching {PCTS} once the parents still to interview are counted.", cls_table,
                  opt={"sortKey": "rate", "filterKey": "school", "filterVals": ["All"] + cls_schools}, full=True)]},
-        {"t": "note", "html": f"Needed = {PCTS} of the class size reported in the interviews (rounded down), the same rule the questionnaire uses. Contributing counts parents whose random price was at or below their bid "
+        {"t": "note", "html": f"Needed = {PCTS} of the class size reported in the interviews (rounded down), the same rule the questionnaire uses"
+                             + (f" (schools finished under the earlier protocol keep their own rule: {', '.join(f'{n} {int(round(100 * t))}%' for n, t in SCHOOL_THR_BY_NAME.items())})" if SCHOOL_THR_BY_NAME else "") + ". Contributing counts parents whose random price was at or below their bid "
                              f"(the revised bid and new draw where a parent changed their bid). Chance of reaching {PCTS} assumes parents still to be interviewed contribute at the class's average rate so far."},
     ]})
 

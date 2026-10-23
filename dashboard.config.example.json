@@ -1,21 +1,34 @@
 {
   "password": "CHANGE_ME",
   "title": "Air Quality Project",
-  "subtitle": "Household survey · parents' perceptions of air pollution and willingness to pay for classroom air purifiers",
-  "location": "Pakistan · Lahore",
+  "subtitle": "Household survey \u00b7 parents' perceptions of air pollution and willingness to pay for classroom air purifiers",
+  "location": "Pakistan \u00b7 Lahore",
   "domain": "airqualityproject.rs.org.pk",
   "target_override": null,
   "min_duration_min": 15,
   "max_duration_min": 120,
-  "field_hours": [7, 21],
+  "field_hours": [
+    7,
+    21
+  ],
   "anonymise_enumerators": true,
   "prefer": "dta",
   "small_cell_min": 5,
   "school_targets": {},
-  "class_threshold": 0.40,
+  "class_threshold": 0.3,
   "raw_download": true,
   "raw_download_include_pii": false,
   "dk_question_threshold_pct": 5.0,
   "dk_record_min_count": 4,
-  "dk_sentinel_values": [999, 9999, -999, 998, 8888]
+  "dk_sentinel_values": [
+    999,
+    9999,
+    -999,
+    998,
+    8888
+  ],
+  "school_thresholds": {
+    "5": 0.4,
+    "7": 0.4
+  }
 }
