@@ -1,3 +1,4 @@
+THR_DEFAULT = 30          # set by build_dashboard.py to the form's class rule (percent)
 # -*- coding: utf-8 -*-
 """
 Plain-language layer for the Air Quality dashboard.
@@ -222,7 +223,7 @@ def auto_read(kind, d, opt, cid=None):
                 ss = [s for s in d["series"] if not s.get("dash")]
                 if len(ss) == 1:
                     y = ss[0]["y"]
-                    ok = [i for i, v in enumerate(y) if v is not None and v >= 30]
+                    ok = [i for i, v in enumerate(y) if v is not None and v >= THR_DEFAULT]
                     tail = f" The @PCT@ line is still met up to about <strong>Rs {ok[-1] * 100:,}</strong>." if ok else " Fewer than @PCT@ would pay even the lowest price."
                     return f"<strong>{y[5]:.0f}%</strong> of parents would pay at least Rs 500 and <strong>{y[10]:.0f}%</strong> at least Rs 1,000." + tail
                 return "Share still willing to pay Rs 1,000 or more: " + " · ".join(f"{s['name'].split(' (')[0]} <strong>{s['y'][10]:.0f}%</strong>" for s in ss if s["y"][10] is not None)

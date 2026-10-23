@@ -293,6 +293,7 @@ _m = re.search(r"\*\s*(0?\.\d+)", _thr_src)
 if _m:
     CLASS_THRESHOLD = float(_m.group(1))
 THR_PCT = int(round(100 * CLASS_THRESHOLD))
+TX.THR_DEFAULT = THR_PCT
 PCTS = f"{THR_PCT}%"                                            # e.g. "30%": used in every class-rule label
 # schools finished under the earlier 40% protocol keep 40%; every later school uses the form's rule (config "school_thresholds": {school_list code: share})
 SCHOOL_THR = {int(k): float(v) for k, v in (CFG.get("school_thresholds") or {}).items()}
@@ -430,6 +431,10 @@ D = D.copy()
 # ---- school and class of each household: from the frame, else from what the enumerator typed
 _short = lambda x: re.sub(r"^(govt\.?|government)\s+", "", str(x).strip(), flags=re.I)
 SCHOOL_THR_BY_NAME = {_short(SCHOOL_LABEL[c]): t for c, t in SCHOOL_THR.items() if c in SCHOOL_LABEL and abs(t - CLASS_THRESHOLD) > 1e-9}
+_old_pcts = sorted({int(round(100 * t)) for t in SCHOOL_THR_BY_NAME.values()})
+_old_names = " & ".join(re.sub(r"^(GGHS|GHS)\s+", "", n).title() for n in SCHOOL_THR_BY_NAME)
+PCTM = PCTS if not SCHOOL_THR_BY_NAME else f"{PCTS} ({' / '.join(f'{x}%' for x in _old_pcts)} in {_old_names}, finished under the earlier protocol)"
+PCTM_SHORT = PCTS if not SCHOOL_THR_BY_NAME else f"{PCTS} / {' / '.join(f'{x}%' for x in _old_pcts)}"
 
 
 def _norm_school_names(series):
@@ -1509,7 +1514,7 @@ ov_kpis = [
        f"{N_TARGET:,} target − {N_C} interviewed − {n_ph_nr} tried by phone without success ({n_ph_retry} to call again, {n_ph_final} refused / wrong number)" if n_ph_nr
        else f"{arm_target[0]} control · {arm_target[1]} video 1 · {arm_target[2]} video 2 targeted"), "navy", "navy"),
     K("🏁", f"{n_cls_done} / {n_cls}", "Classes Finished", f"Every parent interviewed or has a final outcome · {n_cls_80} more with 5 or fewer left", "up", "teal"),
-    K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"{PCTS} of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
+    K("🏫", f"{cls_n['Secured']} / {n_cls}", "Classes With a Purifier Secured", f"{PCTM_SHORT} of a class contributing · {cls_n['On track']} more on track", "up", "purple"),
     K("🚪", fmt_n(N_ATT_ALL), "Total Attempts · Field + Phone", f"{N_C} completed ({conv_all:.0f}%) · {n_ph_nr} phone parents not interviewed" if n_ph_nr else f"{conv:.0f}% ended in a completed interview", "neutral", "amber"),
     *([K("📞", f"{n_covered} / {N_TARGET}", "Parents Covered So Far", f"{N_C} interviewed + {n_ph_nr} tried by phone without success · {pct(n_covered, N_TARGET, 0):.0f}% of {N_TARGET:,}", "neutral", "navy")] if n_ph_nr else []),
     K("💰", fmt_rs(wtp_mean), "Mean Willingness to Pay", f"{fmt_p(share_pos)} bid above zero", "up", ""),
@@ -1530,7 +1535,7 @@ ov_callouts = [
 # ---- key findings (auto-written from the data)
 kf = []
 if n_cls and N_C:
-    kf.append({"cls": "teal", "html": f"<strong>Classrooms:</strong> <strong>{cls_n['Secured']}</strong> of {n_cls} classes have already reached the {PCTS} contribution rule and would get a purifier; "
+    kf.append({"cls": "teal", "html": f"<strong>Classrooms:</strong> <strong>{cls_n['Secured']}</strong> of {n_cls} classes have already reached the {PCTM} contribution rule and would get a purifier; "
                f"<strong>{cls_n['On track']}</strong> more are on track and <strong>{cls_n['At risk']}</strong> are at risk. Expected by the end of fieldwork: about <strong>{cls_expected:.0f}</strong> of {n_cls}."})
 if N_C:
     kf.append({"cls": "primary", "html": f"<strong>Willingness to pay:</strong> the average parent would contribute <strong>{fmt_rs(wtp_mean)}</strong> "
@@ -1584,15 +1589,15 @@ PANELS.append(overview)
 # ====================================================================== PANEL - CLASSROOMS (the class rule)
 _cls_sorted = sorted(class_rows, key=lambda r: (-(r["hits"] / r["needed"] if r["needed"] else 0), r["label"]))
 _pill = lambda k: {"v": {"Secured": 4, "On track": 3, "At risk": 2, "Cannot reach": 1, "Not started": 0}[k], "t": k, "tone": CLS_TONE[k]}
-cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "size", "l": "Class size", "num": True},
+cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "rule", "l": "Rule", "num": True}, {"k": "size", "l": "Class size", "num": True},
                       {"k": "done", "l": "Interviewed", "num": True}, {"k": "pend", "l": "Still to do", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
-                      {"k": "need", "l": f"Needed ({PCTS})", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
-                      {"k": "chance", "l": f"Chance of reaching {PCTS}", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
-             "rows": [{"school": r["school"], "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
+                      {"k": "need", "l": f"Needed ({PCTM_SHORT})", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
+                      {"k": "chance", "l": "Chance of reaching the rule", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
+             "rows": [{"school": r["school"], "rule": {"v": r["thr"], "t": f"{r['thr']}%"}, "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
                        "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "pend": r["rem"], "hits": r["hits"], "need": r["needed"],
                        "rate": {"v": round(r["rate"], 1), "t": f"{r['rate']:.0f}%"}, "chance": {"v": round(100 * r["chance"], 1), "t": f"{100 * r['chance']:.0f}%"},
                        "st": _pill(r["status"])} for r in class_rows],
-             "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above {PCTS}. A class can still change until every parent is interviewed."}
+             "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above {PCTM}. A class can still change until every parent is interviewed."}
 _prog = lambda r: 100.0 * r["hits"] / r["needed"] if r["needed"] else 0.0            # contributors so far as a share of the number needed
 cls_bars = {"items": [{"l": r["label"], "v": round(_prog(r), 1), "p": round(_prog(r), 1), "n": r["hits"], "lab": f"{r['hits']} of {r['needed']}", "slot": CLS_COLOR[r["status"]],
                        "tip": f"{r['hits']} contributing, {r['needed']} needed ({r['thr']}% of {r['size']}) · {r['done']} of {r['target']} interviewed, {r['rem']} still to do · {r['status']}"} for r in _cls_sorted],
@@ -1603,7 +1608,7 @@ if _cls_sorted:
     cls_bars["read"] = (f"Furthest ahead: <strong>{_cls_sorted[0]['label']}</strong> ({_cls_sorted[0]['hits']} of {_cls_sorted[0]['needed']} needed). Furthest behind: <strong>{_cls_sorted[-1]['label']}</strong> ({_cls_sorted[-1]['hits']} of {_cls_sorted[-1]['needed']}). "
                         + (f"Closest to the line and not yet secured: <strong>{_near[0]['label']}</strong> ({_near[0]['hits']} of {_near[0]['needed']} needed)." if _near else ""))
 cls_status = {"items": [{"l": k, "n": v, "p": pct(v, n_cls)} for k, v in cls_n.items() if v], "base": n_cls,
-              "read": f"<strong>{cls_n['Secured']}</strong> secured, <strong>{cls_n['On track']}</strong> on track, <strong>{cls_n['At risk']}</strong> at risk, <strong>{cls_n['Cannot reach']}</strong> cannot reach {PCTS}, <strong>{cls_n['Not started']}</strong> not started."}
+              "read": f"<strong>{cls_n['Secured']}</strong> secured, <strong>{cls_n['On track']}</strong> on track, <strong>{cls_n['At risk']}</strong> at risk, <strong>{cls_n['Cannot reach']}</strong> cannot reach {PCTM}, <strong>{cls_n['Not started']}</strong> not started."}
 _rates = [_prog(r) for r in class_rows if r["done"] > 0]
 _bins = [(0, 25), (25, 50), (50, 75), (75, 100), (100, 100000)]
 _bl = ["Under 25%", "25–49%", "50–74%", "75–99%", "Secured (100%+)"]
@@ -1623,36 +1628,36 @@ by_arm_hit = [(ARM_LAB[v], sh(C.loc[C["_arm"] == v, "_hit"], lambda x: x == 1), 
 cls_arm = {"items": [{"l": f"{l} (n = {n})", "v": r1(x), "p": r1(x), "n": n, "slot": [7, 3, 5][i]} for i, (l, x, n) in enumerate(by_arm_hit) if x is not None], "base": N_C}
 if len(cls_arm["items"]) == 3:
     cls_arm["read"] = ("Share whose random price cleared their bid: " + " · ".join(f"{a}: <strong>{x:.0f}%</strong>" for a, x, _ in by_arm_hit) +
-                       f". More contributors per class means more classes reach the {PCTS} rule.")
+                       f". More contributors per class means more classes reach the {PCTM} rule.")
 
 PANELS.append({
-    "id": "classes", "tab": "🏫 Classrooms", "eyebrow": f"Section 02 · The {PCTS} rule, class by class", "title": "Which Classrooms Get a Purifier?",
-    "blurb": f"A purifier goes into a classroom only if at least {PCTS} of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not reached count as not contributing, so a class can still move until every parent has a final outcome.",
+    "id": "classes", "tab": "🏫 Classrooms", "eyebrow": f"Section 02 · The {PCTM_SHORT} rule, class by class", "title": "Which Classrooms Get a Purifier?",
+    "blurb": f"A purifier goes into a classroom only if at least {PCTM} of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not reached count as not contributing, so a class can still move until every parent has a final outcome.",
     "seg": False, "blocks": [
         {"t": "insight_static", "cls": "navy", "html": "<strong>🏫 How a class gets its purifier:</strong> each parent names the most they would pay. A random price is drawn: if it is at or below the bid, that parent contributes the random price. "
-                   f"If <strong>at least {PCTS} of all parents in the class</strong> (for a class of 28, that is {int(28 * CLASS_THRESHOLD)} parents) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
+                   f"If <strong>at least {PCTM} of all parents in the class</strong> (for a class of 28, that is {int(28 * CLASS_THRESHOLD)} parents) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
         {"t": "kpis", "d": [
             K("🏫", n_cls, "Classes in the Study", f"{len(cls_schools)} schools · classes {int(min(r['grade'] for r in class_rows)) if class_rows else '—'}–{int(max(r['grade'] for r in class_rows)) if class_rows else '—'}", "navy", "navy"),
-            K("✅", cls_n["Secured"], "Purifier Secured", f"{PCTS} of the class already contributing", "up", "green"),
+            K("✅", cls_n["Secured"], "Purifier Secured", f"{PCTM_SHORT} of the class already contributing", "up", "green"),
             K("📈", cls_n["On track"], "On Track", "Likely to get there as parents are interviewed", "up", "teal"),
             K("⚠️", cls_n["At risk"], "At Risk", "Unlikely at the current contribution rate", "neutral", "amber"),
-            K("⛔", cls_n["Cannot reach"], f"Cannot Reach {PCTS}", "Even if every remaining parent contributed", "down", ""),
+            K("⛔", cls_n["Cannot reach"], f"Cannot Reach {PCTM_SHORT}", "Even if every remaining parent contributed", "down", ""),
             K("🎯", f"{cls_expected:.1f}", "Expected Classes With a Purifier", f"Of {n_cls}, at the end of fieldwork, from current bids", "neutral", "purple")]},
         {"t": "grid", "cols": 2, "cards": [
             card("donut", "clStatus", "Where do the classes stand?", "Number of classes in each status", cls_status, opt={"colors": [CLS_COLOR[k] for k in CLS_COLOR if cls_n[k]], "fmt": "n"}),
             card("bar", "clDist", "How many classes are near the target?", "Classes grouped by how much of the contributors they need they already have", cls_dist, opt={"fmt": "n"})]},
         {"t": "grid", "cols": 1, "cards": [
-            card("hbar", "clBars", f"How close is each class to the {PCTS} line?", f"Contributors so far as a share of the number the class needs ({PCTS} of the class). The dashed line is 100%: class secured.", cls_bars,
+            card("hbar", "clBars", f"How close is each class to the {PCTM_SHORT} line?", f"Contributors so far as a share of the number the class needs ({PCTM} of the class). The dashed line is 100%: class secured.", cls_bars,
                  opt={"fmt": "num1", "sfx": "%", "ref": 100, "refLabel": "Number needed", "legend": [[k, CLS_COLOR[k]] for k in ("Secured", "On track", "At risk", "Cannot reach")]}, full=True)]},
         {"t": "grid", "cols": 2, "cards": [
             card("likert", "clSchool", "How do each school's classes split?", "Each bar is one school; the colours are its classes' status", cls_school, opt={"pal": "status", "counts": True, "slots": [CLS_COLOR[k] for k in CLS_COLOR]}),
             card("hbar", "clArm", "Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group", cls_arm, opt={"fmt": "num1", "sfx": "%", "color": 1})]},
         {"t": "grid", "cols": 1, "cards": [
-            card("table", "clTable", "Every class, one line each", f"Click a column to sort, or filter by school. “Chance” is the probability of reaching {PCTS} once the parents still to interview are counted.", cls_table,
+            card("table", "clTable", "Every class, one line each", f"Click a column to sort, or filter by school. “Chance” is the probability of reaching {PCTM} once the parents still to interview are counted.", cls_table,
                  opt={"sortKey": "rate", "filterKey": "school", "filterVals": ["All"] + cls_schools}, full=True)]},
-        {"t": "note", "html": f"Needed = {PCTS} of the class size reported in the interviews (rounded down), the same rule the questionnaire uses"
+        {"t": "note", "html": f"Needed = {PCTM} of the class size reported in the interviews (rounded down), the same rule the questionnaire uses"
                              + (f" (schools finished under the earlier protocol keep their own rule: {', '.join(f'{n} {int(round(100 * t))}%' for n, t in SCHOOL_THR_BY_NAME.items())})" if SCHOOL_THR_BY_NAME else "") + ". Contributing counts parents whose random price was at or below their bid "
-                             f"(the revised bid and new draw where a parent changed their bid). Chance of reaching {PCTS} assumes parents still to be interviewed contribute at the class's average rate so far."},
+                             f"(the revised bid and new draw where a parent changed their bid). Chance of reaching {PCTM} assumes parents still to be interviewed contribute at the class's average rate so far."},
     ]})
 
 
@@ -2045,7 +2050,7 @@ def price_bars(df):
 
 PANELS.append({
     "id": "wtp", "tab": "💰 Willingness to Pay", "eyebrow": "Section 06 · Incentive-compatible elicitation (BDM)", "title": "Willingness to Pay for a Classroom Air Purifier",
-    "blurb": f"Each parent states the most they would contribute towards an air purifier for their child's classroom, then a random price is drawn: they pay the random price only if their bid is at least as high, which makes an honest bid the best strategy. A classroom gets a purifier only if {PCTS} of its own parents end up contributing (see the Classrooms tab).",
+    "blurb": f"Each parent states the most they would contribute towards an air purifier for their child's classroom, then a random price is drawn: they pay the random price only if their bid is at least as high, which makes an honest bid the best strategy. A classroom gets a purifier only if {PCTM} of its own parents end up contributing (see the Classrooms tab).",
     "seg": True, "blocks": [
         {"t": "kpis", "d": SD(wtp_kpis)},
         {"t": "grid", "cols": 1, "cards": [
@@ -2426,7 +2431,7 @@ def clean(o):
 
 
 payload = json.dumps(clean(DATA), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-payload = payload.replace("@PCT@", PCTS).replace("@CAP@", CAPS)          # tokens used in dashboard_text.py
+payload = payload.replace("@PCT@", PCTM).replace("@CAP@", CAPS)          # tokens used in dashboard_text.py
 # last-line PII scan of the serialised payload
 _bad = re.findall(r"\b03\d{9}\b|\b\+?92\d{10}\b|[\w.]+@[\w.]+\.\w+", payload)
 _bad = [b for b in _bad if "example" not in b]
@@ -2437,7 +2442,7 @@ if RAW and RAW_PH:
 if RAW:                                                  # the downloadable file is added after the aggregate scan (it is the export itself)
     DATA["raw"] = RAW
     payload = json.dumps(clean(DATA), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    payload = payload.replace("@PCT@", PCTS).replace("@CAP@", CAPS)
+    payload = payload.replace("@PCT@", PCTM).replace("@CAP@", CAPS)
 say(f"Payload   : {len(payload) / 1024:.0f} KB JSON, {sum(1 for s in SEG_META if s['ok'])} segments, {len(PANELS)} panels")
 say(f"QA        : {n_flag_total} record(s) flagged to verify across {len(qa_rows)} checks")
 if DUMP:
