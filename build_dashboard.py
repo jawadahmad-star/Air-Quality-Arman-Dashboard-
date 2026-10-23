@@ -810,27 +810,45 @@ try:
         if not _sn:
             say(f"  ! {_cf.name}: no matching school in the form, skipped")
             continue
-        _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0}
+        _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0, "untouched": 0, "touched": 0}
+        _rows = []
         for _r in _ws.iter_rows(min_row=4, values_only=True):
-            if not isinstance(_r[0], (int, float)):
+            _k0 = str(_r[0] or "").strip()
+            if _k0.upper().startswith("TOTAL"):
                 break
-            _c = {"actual": _r[5], "complete": _r[6], "refused": _r[7], "off": _r[8], "notpicked": _r[9], "wrong": _r[10], "invalid": _r[11], "sibling": _r[12]}
-            _c = {k: int(v or 0) for k, v in _c.items()}
-            _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]
-            COV_CLASS[(_sn, int(_r[0]))] = _c
+            _m = re.fullmatch(r"(\d+)\s*([A-Za-z]?)", _k0)                # "4" (whole class) or "4A" (section); "Class 4 total" rows are skipped
+            if not _m:
+                continue
+            _n = lambda v: int(float(v or 0))
+            _c = {"actual": _n(_r[5]), "complete": _n(_r[6]), "refused": _n(_r[7]), "off": _n(_r[8]), "notpicked": _n(_r[9]), "wrong": _n(_r[10]),
+                  "invalid": _n(_r[11]), "sibling": _n(_r[12]), "touched": _n(_r[13]), "untouched": _n(_r[14])}
+            _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]                       # can no longer contribute
+            _c["noreach"] = _c["refused"] + _c["off"] + _c["notpicked"] + _c["wrong"] + _c["invalid"]   # no interview: refused, phone off, not picked, wrong / invalid number
+            COV_CLASS[(_sn, int(_m.group(1)), _m.group(2).upper())] = _c
+            _rows.append(_c)
             for k in _tot:
-                _tot[k] += _c[k]
+                if k in _c:
+                    _tot[k] += _c[k]
+        _closed = _tot["untouched"] == 0                                                     # every parent of the school has an outcome: the school is finished
+        for _c in _rows:
+            _c["closed"] = _closed
+        _tot["closed"] = _closed
         COV_SCHOOL[_sn] = _tot
-        say(f"Coverage  : {_sn}: {_tot['actual']} actual parents, {_tot['complete']} complete ({_cf.name})")
+        say(f"Coverage  : {_sn}: {_tot['actual']} actual parents, {_tot['complete']} complete, {sum(c['noreach'] for c in _rows)} not reached, {_tot['untouched']} not yet tried"
+            f" · {'FINISHED' if _closed else 'in progress'} ({_cf.name})")
 except Exception as e:
     say(f"  ! coverage sheets skipped: {e!r}")
+
+
+def _cov_of(school, grade, sec=""):
+    return COV_CLASS.get((_short(school), int(grade), str(sec).strip().upper())) or COV_CLASS.get((_short(school), int(grade), ""))
 
 
 def _class_size(ck):
     _ls = LIST_SIZE.get((str(ck).split("|")[0], int(str(ck).split("|")[1]), str(ck).split("|")[2]))
     if _ls:                                              # typed class list: its rows are the parents of the section
         return _ls
-    _cv = COV_CLASS.get((_short(str(ck).split("|")[0]), int(str(ck).split("|")[1])))
+    _cv = _cov_of(str(ck).split("|")[0], str(ck).split("|")[1], str(ck).split("|")[2])
     if _cv:                                              # list-checked sheet: actual parents in the class
         return _cv["actual"]
     _s = KIDC.loc[KIDC["_ckey"] == ck, "_tpar"].dropna()
@@ -1329,7 +1347,7 @@ N_ATT_ALL = N_ATT + n_ph_nr                                     # field visits o
 conv_all = pct(N_C, N_ATT_ALL)
 n_covered = N_C + n_ph_nr                                       # parents interviewed + parents tried by phone without success
 remaining = max(N_TARGET - n_covered, 0)                        # households still open: interviewed, or already tried by phone without success, are taken off
-COV_EXTRA = sum(v["actual"] - v["complete"] for v in COV_SCHOOL.values())    # children of closed-out schools reached but not interviewed (refused, wrong number, phone off ...)
+COV_EXTRA = sum(v["touched"] - v["complete"] for v in COV_SCHOOL.values())    # children of closed-out schools reached but not interviewed (refused, wrong number, phone off ...)
 if COV_SCHOOL:                                                  # target is counted in children (class lists), so take off the children interviewed + the ones reached without an interview
     remaining = max(N_TARGET - len(KIDC) - COV_EXTRA - n_ph_nr, 0)
 days_left = math.ceil(remaining / per_day) if per_day and remaining else 0
@@ -1425,7 +1443,7 @@ for _ck in UNIVERSE:
     _nd = len(_g)
     _sizes = _g["_tpar"].dropna()
     _size = _class_size(_ck)
-    _cov = COV_CLASS.get((_short(_ck.split("|")[0]), int(_ck.split("|")[1])))
+    _cov = _cov_of(_ck.split("|")[0], _ck.split("|")[1], _ck.split("|")[2])
     if _cov:
         _size = _cov["actual"]
     _target = _size
@@ -1436,7 +1454,7 @@ for _ck in UNIVERSE:
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
     _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
     if _cov:
-        _rem = max(_size - _cov["complete"] - _cov["final"], 0)
+        _rem = 0 if _cov["closed"] else max(_size - _cov["complete"] - _cov["final"] - _cov["sibling"], 0)     # a finished school has nobody left to try
         _refused = _cov["final"]
     elif len(_sizes) or HAS_FRAME_CLASS:
         _rem = max(_size - _nd - _refused, 0)            # parents of the class with no final outcome yet (refusals can no longer contribute)
@@ -1456,7 +1474,7 @@ for _ck in UNIVERSE:
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
     class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _cov["complete"] if _cov else _nd,
-                       "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
+                       "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "nr": _cov["noreach"] if _cov else _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid"])})
 class_rows.sort(key=lambda r: (r["school"], r["grade"], r["sec"]))
@@ -1489,7 +1507,7 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
     _cv = COV_SCHOOL.get(_sn)
     if _cv:                                                      # list-checked sheet: actual parents, complete, and every other outcome
         _t, _d = _cv["actual"], _cv["complete"]
-        _reach = _cv["actual"]
+        _reach = _cv["touched"]
         _ph = {"nr": _reach - _d, "retry": _cv["off"] + _cv["notpicked"], "final": _cv["final"]}
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured" if _cr else "Not started yet",
                           "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
@@ -1590,11 +1608,11 @@ PANELS.append(overview)
 _cls_sorted = sorted(class_rows, key=lambda r: (-(r["hits"] / r["needed"] if r["needed"] else 0), r["label"]))
 _pill = lambda k: {"v": {"Secured": 4, "On track": 3, "At risk": 2, "Cannot reach": 1, "Not started": 0}[k], "t": k, "tone": CLS_TONE[k]}
 cls_table = {"cols": [{"k": "school", "l": "School"}, {"k": "cls", "l": "Class"}, {"k": "rule", "l": "Rule", "num": True}, {"k": "size", "l": "Class size", "num": True},
-                      {"k": "done", "l": "Interviewed", "num": True}, {"k": "pend", "l": "Still to do", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
+                      {"k": "done", "l": "Interviewed", "num": True}, {"k": "nr", "l": "Could not reach", "num": True}, {"k": "pend", "l": "Still to do", "num": True}, {"k": "hits", "l": "Contributing", "num": True},
                       {"k": "need", "l": "Needed ({R})", "num": True}, {"k": "rate", "l": "Share contributing", "num": True},
                       {"k": "chance", "l": "Chance of reaching {R}", "num": True}, {"k": "st", "l": "Status", "verdict": True}],
              "rows": [{"school": r["school"], "rule": {"v": r["thr"], "t": f"{r['thr']}%"}, "cls": f"Class {r['grade']}" + (f"-{r['sec']}" if r["sec"] else ""), "size": r["size"],
-                       "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "pend": r["rem"], "hits": r["hits"], "need": r["needed"],
+                       "done": {"v": r["done"], "t": f"{r['done']} / {r['target']}"}, "nr": r["nr"], "pend": r["rem"], "hits": r["hits"], "need": r["needed"],
                        "rate": {"v": round(r["rate"], 1), "t": f"{r['rate']:.0f}%"}, "chance": {"v": round(100 * r["chance"], 1), "t": f"{100 * r['chance']:.0f}%"},
                        "st": _pill(r["status"])} for r in class_rows],
              "read": f"<strong>{cls_n['Secured']}</strong> of {n_cls} classes are already at or above {PCTM}. A class can still change until every parent is interviewed."}
@@ -1653,7 +1671,7 @@ PANELS.append({
             card("likert", "clSchool", "How do each school's classes split?", "Each bar is one school; the colours are its classes' status", cls_school, opt={"pal": "status", "counts": True, "slots": [CLS_COLOR[k] for k in CLS_COLOR]}),
             card("hbar", "clArm", "Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group", cls_arm, opt={"fmt": "num1", "sfx": "%", "color": 1})]},
         {"t": "grid", "cols": 1, "cards": [
-            card("table", "clTable", "Every class, one line each", f"Click a column to sort, or filter by school. “Chance” is the probability of reaching {PCTM} once the parents still to interview are counted.", cls_table,
+            card("table", "clTable", "Every class, one line each", "Click a column to sort, or filter by school. Interviewed = parents interviewed; Could not reach = refused, phone off, not picked, wrong or invalid number; Still to do = parents we can still try (0 once a school is finished).", cls_table,
                  opt={"sortKey": "rate", "filterKey": "school", "filterVals": ["All"] + cls_schools}, full=True)]},
         {"t": "note", "html": f"Needed = {PCTM} of the class size reported in the interviews (rounded down), the same rule the questionnaire uses"
                              + (f" (schools finished under the earlier protocol keep their own rule: {', '.join(f'{n} {int(round(100 * t))}%' for n, t in SCHOOL_THR_BY_NAME.items())})" if SCHOOL_THR_BY_NAME else "") + ". Contributing counts parents whose random price was at or below their bid "

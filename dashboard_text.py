@@ -110,8 +110,9 @@ def card_text(target):
                      "Har school ki classes kin kin status mein hain. Number classes ki ginti hai. Is se pata chalta hai kaun se school ki classes zyada tar purifier hasil kar rahi hain.", None),
         "clArm": ("Do the videos raise the share who contribute?", "Share whose random price cleared their bid, by study group.",
                   "Control, Video 1 aur Video 2 mein kitne % parents ka random price unke bid se kam nikla (yani woh contribute karenge). Video ka asar dekhne ka seedha tareeqa.", None),
-        "clTable": ("Every class, one line each", "Click a column to sort, or filter by school. “Chance” is the probability of reaching @PCT@ once the parents still to interview are counted.",
-                    "Har class ki poori tafseel: class size, kitne parents ka interview hua, kitne contribute kar rahe hain, kitne chahiyein (@PCT@), aur baaqi parents ke baad @PCT@ tak pahunchne ka imkaan (Chance). Status aakhri column mein hai.", "chance"),
+        "clTable": ("Every class, one line each", ("Click a column to sort, or filter by school. <strong>Interviewed</strong> = parents interviewed out of the class size. <strong>Could not reach</strong> = parents who did not give an interview: refused, phone off, did not pick up, wrong or invalid number. "
+                     "<strong>Still to do</strong> = parents we can still try (not called yet, or to be called again); it is 0 for a finished school. “Chance” is the probability of reaching the class rule once the parents still to do are counted."),
+                    "Har class ki poori tafseel: class size, Interviewed (interview hua), Could not reach (refuse, phone off, call nahi uthayi, wrong ya invalid number — interview nahi ho saka), Still to do (jin parents ko abhi try karna baaqi hai; mukammal school mein 0), kitne contribute kar rahe hain, kitne chahiyein (@PCT@), aur Chance. Status aakhri column mein hai.", "chance"),
         # ---- field ops
         "opsCum": ('Are we on pace to finish?', "Interviews done so far, where today's pace takes us (dashed), and the target (red).",
                     'Hari line ab tak ke mukammal interviews hain. Dashed line maujooda raftaar par agla andaza hai aur laal line target. Jahan dashed line laal line ko chhoti hai wahi mutawaqqa khatam hone ki tareekh hai.', "cum"),
