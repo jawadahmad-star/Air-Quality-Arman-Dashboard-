@@ -1516,7 +1516,7 @@ for _ck in UNIVERSE:
     else:
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
-    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _cov["complete"] if _cov else _nd,
+    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": (_nd if _cov["closed"] else _cov["complete"]) if _cov else _nd,   # finished school: children whose parent bid (one bid per child), as in the sheet
                        "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "nr": _cov["noreach"] if _cov else _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid"])})
