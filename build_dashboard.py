@@ -77,6 +77,10 @@ ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.40))      # overridden below by the rule actually coded in the form
 RAW_INCLUDE_PII = bool(CFG.get("raw_download_include_pii", True))    # raw-data download: every column as delivered; false strips identifier columns
 RAW_DOWNLOAD = bool(CFG.get("raw_download", True))
+# columns always left out of the raw-data downloads (client request, Oct 27 2026): identifiers, point GPS, school/child names, payment phone details
+RAW_DROP = {"enum_school_label", "geo_2latitude", "geo_2longitude", "geo_2altitude", "geo_2accuracy", "fname", "lname", "address", "phone_mobile",
+            "name_child_1", "name_child_2", "name_child_3", "school_child_1", "school_child_2", "school_child_3",
+            "mobile_number", "mobile_network", "receiver_name"}
 # don't-know / non-response flags (client comment, Sep 2026): a question is flagged when more than
 # this share of the respondents it was actually asked answer Don't Know / Refused / Not sure or leave
 # it blank; a completed record is flagged when this many of its don't-know-eligible answers land there.
@@ -2351,7 +2355,7 @@ PANELS = [p for p in PANELS if p["id"] not in ("ops", "fair", "time")]
 RAW = None
 if RAW_DOWNLOAD:
     _last = RAW_DF["starttime"].replace("", np.nan).dropna().max() if "starttime" in RAW_DF else ""
-    if csv_path and RAW_INCLUDE_PII and not (dta_path and PREFER == "dta"):
+    if csv_path and RAW_INCLUDE_PII and not RAW_DROP and not (dta_path and PREFER == "dta"):
         # the SurveyCTO CSV itself, every column and row untouched (also when a .dta sits beside it, unless the .dta holds extra submissions)
         _csv = csv_path.read_text(encoding="utf-8-sig")
         _ncols = len(pd.read_csv(csv_path, dtype=str, nrows=0, encoding="utf-8-sig").columns)
@@ -2359,23 +2363,23 @@ if RAW_DOWNLOAD:
         _src = RAW_DF
         if dta_path and PREFER == "dta":                # download = the .dta exactly (its rows, its columns, its corrected values)
             _src = RAW_DF[RAW_DF["_key"].isin(dta_df["_key"])]
-            _keep = [c for c in dta_df.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+            _keep = [c for c in dta_df.columns if not c.startswith("_") and c.lower() not in RAW_DROP and (RAW_INCLUDE_PII or not is_pii(c))]
         else:
-            _keep = [c for c in RAW_DF.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+            _keep = [c for c in RAW_DF.columns if not c.startswith("_") and c.lower() not in RAW_DROP and (RAW_INCLUDE_PII or not is_pii(c))]
         _raw_out = _src[_keep].rename(columns=lambda c: ORIG_NAMES.get(c, c))
         _csv = _raw_out.to_csv(index=False)
         _ncols = _raw_out.shape[1]
     RAW = {"name": f"AirQuality_field_data_{datetime.now().strftime('%Y-%m-%d')}.csv", "csv": _csv,
            "rows": int(len(RAW_DF)), "cols": int(_ncols), "last": str(_last)[:16] if _last else "-", "pii": RAW_INCLUDE_PII}
     say(f"Raw data  : {RAW['rows']} submission(s) x {RAW['cols']} columns, {len(_csv) / 1048576:.1f} MB CSV "
-        f"({'all columns, nothing removed' if RAW_INCLUDE_PII else 'identifier columns removed'})")
+        f"({'all columns except the requested exclusions' if RAW_INCLUDE_PII else 'identifier columns removed'})")
     overview["blocks"].insert(2, {"t": "download"})
     # phone-call data, straight from its .dta (all calls, all columns), as a second download
     RAW_PH = None
     _pdta = next(iter(sorted(PHONE_DIR.glob("*Call Survey*.dta"))), None)
     if _pdta:
         _pd_ = load_file(_pdta)
-        _pk = [c for c in _pd_.columns if not c.startswith("_") and (RAW_INCLUDE_PII or not is_pii(c))]
+        _pk = [c for c in _pd_.columns if not c.startswith("_") and c.lower() not in RAW_DROP and (RAW_INCLUDE_PII or not is_pii(c))]
         _pcsv = _pd_[_pk].rename(columns=lambda c: ORIG_NAMES.get(c, c)).to_csv(index=False)
         _plast = _pd_["starttime"].replace("", np.nan).dropna().max() if "starttime" in _pd_ else ""
         RAW_PH = {"name": f"AirQuality_phone_calls_{datetime.now().strftime('%Y-%m-%d')}.csv", "csv": _pcsv,
