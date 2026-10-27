@@ -80,7 +80,7 @@ RAW_DOWNLOAD = bool(CFG.get("raw_download", True))
 # columns always left out of the raw-data downloads (client request, Oct 27 2026): identifiers, point GPS, school/child names, payment phone details
 RAW_DROP = {"enum_school_label", "geo_2latitude", "geo_2longitude", "geo_2altitude", "geo_2accuracy", "fname", "lname", "address", "phone_mobile",
             "name_child_1", "name_child_2", "name_child_3", "school_child_1", "school_child_2", "school_child_3",
-            "mobile_number", "mobile_network", "receiver_name"}
+            "mobile_number", "mobile_network", "receiver_name", "name_of_parent", "name_child"}
 # don't-know / non-response flags (client comment, Sep 2026): a question is flagged when more than
 # this share of the respondents it was actually asked answer Don't Know / Refused / Not sure or leave
 # it blank; a completed record is flagged when this many of its don't-know-eligible answers land there.
