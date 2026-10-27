@@ -743,6 +743,41 @@ _ok_k = KID["_rand"].notna() & KID["_bid"].notna()
 KID["_hit"] = np.where(_ok_k, (KID["_rand"] <= KID["_bid"]).astype(float), np.nan)
 KID["_pclear"] = np.where(KID["_bid"].notna(), (KID["_bid"].clip(0, CAP) + 1) / (CAP + 1.0), np.nan)
 
+# ---- finished schools: the class's BONUS parent is decided on the second (bonus-round) bid, not the first. The per-school
+# Parents_Coverage_*.xlsx "Contribution" tab names that parent ("hh N ... bid 2 = X, random = Y"); only a school whose
+# every parent has an outcome (NOT TOUCHED = 0) is applied. Matched to the child whose bonus bid and bonus draw equal X and Y.
+BONUS_OVR = []                                            # (hh, child k, bid 2, random 2)
+try:
+    import openpyxl as _ox
+    for _cf in sorted(HERE.glob("Parents_Coverage_*.xlsx")):
+        _wb = _ox.load_workbook(_cf, data_only=True)
+        if "Contribution" not in _wb.sheetnames or "Coverage" not in _wb.sheetnames:
+            continue
+        _tot = next((r for r in _wb["Coverage"].iter_rows(min_row=4, values_only=True) if str(r[0] or "").upper().startswith("TOTAL")), None)
+        if not _tot or int(float(_tot[14] or 0)) != 0:
+            continue                                      # school still in progress
+        _n0 = len(BONUS_OVR)
+        for _r in _wb["Contribution"].iter_rows(min_row=4, values_only=True):
+            for _cell in _r:
+                _m = re.search(r"hh\s*(\d+).*?bid 2\s*=\s*(\d+).*?random\s*=\s*(\d+)", str(_cell or ""))
+                if _m:
+                    _hh_, _b_, _x_ = (int(g) for g in _m.groups())
+                    for _k in range(1, max(K_MAX, 1) + 1):
+                        _sfx = f"_{_k}" if REPEAT_LAYOUT else ""
+                        _hit_rows = D[(D["_hh"] == _hh_) & (num(D, "contribute_will_bonus" + _sfx) == _b_) & (num(D, "bonus_contribute_rand_number" + _sfx) == _x_)]
+                        if len(_hit_rows):
+                            BONUS_OVR.append((_hh_, _k, _b_, _x_))
+                            break
+        say(f"Bonus bid : {_cf.name}: {len(BONUS_OVR) - _n0} bonus parent(s) scored on their second bid")
+except Exception as e:
+    say(f"  ! bonus-parent override skipped: {e!r}")
+for _hh_, _k, _b_, _x_ in BONUS_OVR:
+    _mk = (KID["_hh"] == _hh_) & (KID["_k"] == _k)
+    KID.loc[_mk, "_bid"], KID.loc[_mk, "_rand"] = float(_b_), float(_x_)
+_ok_k = KID["_rand"].notna() & KID["_bid"].notna()
+KID["_hit"] = np.where(_ok_k, (KID["_rand"] <= KID["_bid"]).astype(float), np.nan)
+KID["_pclear"] = np.where(KID["_bid"].notna(), (KID["_bid"].clip(0, CAP) + 1) / (CAP + 1.0), np.nan)
+
 # first child's answers become the household-level columns the rest of the dashboard reads
 SMULTI = {str(n).strip() for n, t in zip(_sv["name"], _sv["type"]) if str(t).startswith("select_multiple")}
 if REPEAT_LAYOUT:
@@ -892,6 +927,10 @@ C["_bonus"] = num(C, "contribute_will_bonus")
 _r0, _r1 = num(C, "main_contribute_rand_number"), num(C, "change_rand_number")
 _use_new = _chg & _r1.notna()
 C["_rand"] = np.where(_fr.notna(), _fr, np.where(_use_new, _r1, _r0))
+for _hh_, _k, _b_, _x_ in BONUS_OVR:                    # household-level tabs read child 1: its bonus-parent result uses the second bid too
+    if _k == 1:
+        _mk = C["_hh"] == _hh_
+        C.loc[_mk, "_bid"], C.loc[_mk, "_rand"] = float(_b_), float(_x_)
 C["_bid_d"] = C["_bid"]
 C["_bid_d"] = pd.to_numeric(C["_bid_d"], errors="coerce")
 _ok = C["_rand"].notna() & C["_bid_d"].notna()
