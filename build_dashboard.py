@@ -77,6 +77,7 @@ ANON_ENUM = bool(CFG.get("anonymise_enumerators", True))
 CLASS_THRESHOLD = float(CFG.get("class_threshold", 0.40))      # overridden below by the rule actually coded in the form
 RAW_INCLUDE_PII = bool(CFG.get("raw_download_include_pii", True))    # raw-data download: every column as delivered; false strips identifier columns
 RAW_DOWNLOAD = bool(CFG.get("raw_download", True))
+TEXT_GRADE_SCHOOLS = [str(x).upper() for x in CFG.get("grade_text_schools", ["SALAMAT", "FURQAN"])]     # schools whose .dta grade_child (grade + section) was already corrected to the class list: used as is
 # columns always left out of the raw-data downloads (client request, Oct 27 2026): identifiers, point GPS, school/child names, payment phone details
 RAW_DROP = {"enum_school_label", "geo_2latitude", "geo_2longitude", "geo_2altitude", "geo_2accuracy", "fname", "lname", "address", "phone_mobile",
             "name_child_1", "name_child_2", "name_child_3", "school_child_1", "school_child_2", "school_child_3",
@@ -734,6 +735,13 @@ if LIST_ROWS:                                             # typed lists decide t
     for _r_, _k_, _s_, _g_, _x_ in zip(KID["_row"], KID["_k"], KID["_sch"], KID["_gradeN"], KID["_sec"]):
         if _s_ in LIST_ROWS:
             _mt = LIST_MATCH.get((int(_r_), int(_k_)))
+            _tx = re.sub(r"[()]", " ", str(D[f"grade_child_{_k_}"].iat[int(_r_)])) if (f"grade_child_{_k_}" in D.columns) else ""
+            if any(w_ in str(_s_).upper() for w_ in TEXT_GRADE_SCHOOLS) and _grade_of(_tx) in STUDY_GRADES and _sec_of(_tx):
+                _kg.append(float(_grade_of(_tx))); _ks.append(_sec_of(_tx))      # the cleaned grade_child text in the .dta already carries the class-list section
+                continue
+            if any(w_ in str(_s_).upper() for w_ in TEXT_GRADE_SCHOOLS) and _grade_of(_tx) in STUDY_GRADES and int(_k_) == 1 and ("enum_section" in D.columns) and str(D["enum_section"].iat[int(_r_)]).strip():
+                _kg.append(float(_grade_of(_tx))); _ks.append(str(D["enum_section"].iat[int(_r_)]).strip().upper())      # grade written without a section: the sampled child's section is the enumerator's
+                continue
             _kg.append(float(_mt[0]) if _mt else np.nan); _ks.append(_mt[1] if _mt else "")
         else:
             _kg.append(_g_); _ks.append(_x_)
