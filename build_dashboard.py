@@ -842,7 +842,8 @@ cls_schools_all = sorted({_short(_k.split("|")[0]) for _k in UNIVERSE} | {_short
 try:
     import openpyxl
     for _cf in sorted(HERE.glob("Parents_Coverage_*.xlsx")):
-        _ws = openpyxl.load_workbook(_cf, data_only=True)["Coverage"]
+        _wbk = openpyxl.load_workbook(_cf, data_only=True)
+        _ws = _wbk["Coverage"]
         _title = str(_ws["A1"].value or "").split("(EMIS")[0]
         _tw = set(_nkc(_title).split()) - {"GGHS", "GHS", "SCHOOL", "GIRLS", "HIGH", "GOVT", "CDG"}
         _sn = next((_s for _s in cls_schools_all if len(_tw & set(_nkc(_s).split())) >= 2), None)
@@ -855,7 +856,7 @@ try:
             _k0 = str(_r[0] or "").strip()
             if _k0.upper().startswith("TOTAL"):
                 break
-            _m = re.fullmatch(r"(\d+)\s*([A-Za-z]?)", _k0)                # "4" (whole class) or "4A" (section); "Class 4 total" rows are skipped
+            _m = re.fullmatch(r"(?:class\s*)?(\d+)\s*([A-Za-z]?)", _k0, re.I)       # "4" / "Class 4" (whole class) or "4A" (section); "Class 4 total" rows are skipped
             if not _m:
                 continue
             _n = lambda v: int(float(v or 0))
@@ -877,6 +878,18 @@ try:
             f" · {'FINISHED' if _closed else 'in progress'} ({_cf.name})")
 except Exception as e:
     say(f"  ! coverage sheets skipped: {e!r}")
+
+# a class the coverage sheet keeps as ONE list (e.g. Furqan Class 4 / Class 5: enumerators typed section "A") is one class here too
+_whole = {(_s, _g) for (_s, _g, _x) in COV_CLASS if _x == ""} - {(_s, _g) for (_s, _g, _x) in COV_CLASS if _x}
+if _whole:
+    def _unsec(ck):
+        if not isinstance(ck, str):
+            return ck
+        _s, _g, _x = ck.split("|")
+        return f"{_s}|{_g}|" if _x and (_s, int(_g)) in {(_a, _b) for (_a, _b) in _whole} else ck
+    for _df in (D, KID, KIDC):
+        _df["_ckey"] = _df["_ckey"].map(_unsec)
+    UNIVERSE = {_unsec(_k): _v for _k, _v in UNIVERSE.items()}
 
 
 def _cov_of(school, grade, sec=""):
