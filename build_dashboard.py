@@ -1512,7 +1512,7 @@ for _ck in UNIVERSE:
         _size = _cov["actual"]
     _target = _size
     _thr = SCHOOL_THR_BY_NAME.get(_short(_ck.split("|")[0]), CLASS_THRESHOLD)
-    _needed = int(_size * _thr)                          # same rule as the form: int(total_parents x threshold)
+    _needed = math.ceil(round(_size * _thr, 6))          # true percentage rule: contributors / class size must be >= threshold (13/45 = 28.9% does NOT win, 14/45 = 31.1% does)
     _hits = int(np.nansum(_g["_hit"])) if _nd else 0
     _hhs = [h for h, c in _hh_class.items() if c == _ck]
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
@@ -1717,7 +1717,7 @@ PANELS.append({
     "blurb": f"A purifier goes into a classroom only if at least {PCTM} of that class's parents end up contributing. Each parent's contribution is decided by a random price against their own bid. Parents we have not reached count as not contributing, so a class can still move until every parent has a final outcome.",
     "seg": False, "blocks": [
         {"t": "insight_static", "cls": "navy", "html": "<strong>🏫 How a class gets its purifier:</strong> each parent names the most they would pay. A random price is drawn: if it is at or below the bid, that parent contributes the random price. "
-                   f"If <strong>at least {PCTM} of all parents in the class</strong> (for a class of 28, that is {int(28 * CLASS_THRESHOLD)} parents) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
+                   f"If <strong>at least {PCTM} of all parents in the class</strong> (for a class of 28, that is {math.ceil(round(28 * CLASS_THRESHOLD, 6))} parents; for 45 it is {math.ceil(round(45 * CLASS_THRESHOLD, 6))}, because 13 of 45 is only 28.9%) end up contributing, the whole class gets a purifier; otherwise nobody pays. Parents who cannot be reached do not count."},
         {"t": "kpis", "d": [
             K("🏫", n_cls, "Classes in the Study", f"{len(cls_schools)} schools · classes {int(min(r['grade'] for r in class_rows)) if class_rows else '—'}–{int(max(r['grade'] for r in class_rows)) if class_rows else '—'}", "navy", "navy"),
             K("✅", cls_n["Secured"], "Purifier Secured", f"{PCTM_SHORT} of the class already contributing", "up", "green"),
