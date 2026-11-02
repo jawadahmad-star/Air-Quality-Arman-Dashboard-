@@ -597,7 +597,17 @@ def _list_match(sch, name, parent, gtxt, phones=(), hint=None, sib=""):
         if len({r[2:4] for r in cand}) > 1 and hint:
             cand = [r for r in cand if r[2:4] == hint] or cand
         if len({r[2:4] for r in cand}) == 1:
-            return cand[0][2:4]
+            _pick = cand[0][2:4]
+            # a name hit in ANOTHER section than the one the enumerator wrote ("6b") counts only when the parent / father also fits;
+            # an abbreviated first name ("m faizan") alone matches the wrong child by chance
+            _tt = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", str(gtxt), flags=re.I)
+            _mm = re.fullmatch(r"\s*(\d+)\s*[-_ ]?\s*([A-Za-z])\s*", _tt)
+            _typed = (int(_mm.group(1)), _mm.group(2).upper()) if _mm else None
+            if _typed and _typed != _pick and _typed in LIST_CLASSES.get(sch, ()) and len(_ltok(n)) <= 1:
+                _tpar = _ltok(parent)                     # only a one-word name left after "m" / "muhammad" is dropped: too weak to move the child out of the typed section
+                if not any(_lrat(t_, b_) >= 0.9 for r_ in cand for t_ in _tpar for b_ in _ltok(r_[1])):
+                    return _typed
+            return _pick
     # not found by name: an explicit "6th B" typed by the enumerator, if that section exists in the school's list
     t_ = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", str(gtxt), flags=re.I)
     m_ = re.fullmatch(r"\s*(\d+)\s*[-_ ]?\s*([A-Za-z])\s*", t_)
