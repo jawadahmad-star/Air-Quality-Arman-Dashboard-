@@ -911,7 +911,7 @@ try:
             _cs = _wbk["Contribution"]
             _ch = [str(c.value or "").strip().lower() for c in _cs[3]]
             _cc = next((i for i, h in enumerate(_ch) if h.startswith(("contributed", "contribute kiya"))), None)
-            _cn = next((i for i, h in enumerate(_ch) if (h.startswith("needed") or h[:4] in ("40% ", "30% ")) and "reference" not in h and "enum" not in h), None)
+            _cn = next((i for i, h in enumerate(_ch) if h.startswith("needed") and "reference" not in h), None)      # older sheets' "(list)" column rounds DOWN (13/45 passes): not used, the true-percentage rule is recomputed instead
             _cp = next((i for i, h in enumerate(_ch) if h.startswith("contribution %")), None)
             _cv_ = next((i for i, h in enumerate(_ch) if h.startswith("air purifier")), None)
             for _r in _cs.iter_rows(min_row=4, values_only=True):
