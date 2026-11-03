@@ -772,7 +772,9 @@ try:
         if "Contribution" not in _wb.sheetnames or "Coverage" not in _wb.sheetnames:
             continue
         _tot = next((r for r in _wb["Coverage"].iter_rows(min_row=4, values_only=True) if str(r[0] or "").upper().startswith("TOTAL")), None)
-        if not _tot or int(float(_tot[14] or 0)) != 0:
+        _bh = [str(c.value or "").strip().lower() for c in _wb["Coverage"][3]]
+        _bi = next((i for i, h in enumerate(_bh) if h.startswith("not touched")), 14)
+        if not _tot or int(float(_tot[_bi] or 0)) != 0:
             continue                                      # school still in progress
         _n0 = len(BONUS_OVR)
         for _r in _wb["Contribution"].iter_rows(min_row=4, values_only=True):
@@ -833,6 +835,9 @@ if frame is not None:
 n_dup_rows = 0                                           # every completed submission counts: the same pool hh_id is reused by different parents
 C = comp_all.sort_values("_dt").reset_index(drop=True)
 
+_dup_hh = C.loc[C["_hh"].duplicated(keep=False), ["_hh", "_ckey"]]
+if len(_dup_hh):
+    say("Same hh_id, different parents (each kept as its own household): " + "; ".join(f"{int(h)} -> {', '.join(str(x) for x in g['_ckey'])}" for h, g in _dup_hh.groupby("_hh")))
 KIDC = KID[KID["_row"].isin(C["_row"])].copy()           # child records belonging to the analysis-base interviews
 
 # ---- the classes of the study and how many parents each one has
@@ -870,6 +875,16 @@ try:
             continue
         _tot = {"actual": 0, "complete": 0, "refused": 0, "off": 0, "notpicked": 0, "wrong": 0, "invalid": 0, "sibling": 0, "final": 0, "untouched": 0, "touched": 0}
         _rows = []
+        # columns are found by their header text: the sheets differ (15 or 16 columns; newer ones carry an extra "sibling is in MAIN survey" column)
+        _hdr = [str(c.value or "").strip().lower() for c in _ws[3]]
+        def _ci(*keys, default=None):
+            for _i, _h in enumerate(_hdr):
+                if any(_h.startswith(k) for k in keys):
+                    return _i
+            return default
+        _I = {"actual": _ci("actual"), "complete": _ci("complete"), "refused": _ci("refused"), "off": _ci("powered"), "notpicked": _ci("not picked"),
+              "wrong": _ci("wrong"), "invalid": _ci("invalid"), "touched": _ci("total touched"), "untouched": _ci("not touched")}
+        _I["sibling"] = next((_i for _i, _h in enumerate(_hdr) if _i > (_I["invalid"] or 0) and ("sibling" in _h) and ("main survey" not in _h) and ("not reported" not in _h)), None)
         for _r in _ws.iter_rows(min_row=4, values_only=True):
             _k0 = str(_r[0] or "").strip()
             if _k0.upper().startswith("TOTAL"):
@@ -878,8 +893,7 @@ try:
             if not _m:
                 continue
             _n = lambda v: int(float(v or 0))
-            _c = {"actual": _n(_r[5]), "complete": _n(_r[6]), "refused": _n(_r[7]), "off": _n(_r[8]), "notpicked": _n(_r[9]), "wrong": _n(_r[10]),
-                  "invalid": _n(_r[11]), "sibling": _n(_r[12]), "touched": _n(_r[13]), "untouched": _n(_r[14])}
+            _c = {k: (_n(_r[_ix]) if _ix is not None else 0) for k, _ix in _I.items()}
             _c["final"] = _c["refused"] + _c["wrong"] + _c["invalid"]                       # can no longer contribute
             _c["noreach"] = _c["refused"] + _c["off"] + _c["notpicked"] + _c["wrong"] + _c["invalid"]   # no interview: refused, phone off, not picked, wrong / invalid number
             COV_CLASS[(_sn, int(_m.group(1)), _m.group(2).upper())] = _c
@@ -887,6 +901,37 @@ try:
             for k in _tot:
                 if k in _c:
                     _tot[k] += _c[k]
+        # the sheet's own Contribution tab (contributed after the bonus-parent rule, needed, verdict) is what the dashboard shows for this school
+        _stamp = re.search(r"refreshed\s+(\d+)-([A-Za-z]{3})-(\d{4})", str(_ws["A1"].value or ""))
+        _data_day = max((datetime.fromtimestamp(_f.stat().st_mtime) for _f in HERE.glob("*.dta")), default=None)
+        _sheet_old = bool(_stamp and _data_day and datetime.strptime("-".join(_stamp.groups()), "%d-%b-%Y").date() < _data_day.date())   # sheet is older than the data: keep the data's own contributor count
+        if _sheet_old:
+            say(f"Coverage  : {_cf.name} was refreshed {_stamp.group(0)[10:]}, older than the data - contributor counts come from the data until the sheet is refreshed")
+        if "Contribution" in _wbk.sheetnames and not _sheet_old:
+            _cs = _wbk["Contribution"]
+            _ch = [str(c.value or "").strip().lower() for c in _cs[3]]
+            _cc = next((i for i, h in enumerate(_ch) if h.startswith(("contributed", "contribute kiya"))), None)
+            _cn = next((i for i, h in enumerate(_ch) if (h.startswith("needed") or h[:4] in ("40% ", "30% ")) and "reference" not in h and "enum" not in h), None)
+            _cp = next((i for i, h in enumerate(_ch) if h.startswith("contribution %")), None)
+            _cv_ = next((i for i, h in enumerate(_ch) if h.startswith("air purifier")), None)
+            for _r in _cs.iter_rows(min_row=4, values_only=True):
+                _k0 = str(_r[0] or "").strip()
+                if _k0.upper().startswith("TOTAL"):
+                    break
+                _m = re.fullmatch(r"(?:class\s*)?(\d+)\s*([A-Za-z]?)", _k0, re.I)
+                _cc_ = COV_CLASS.get((_sn, int(_m.group(1)), _m.group(2).upper())) if _m else None
+                if not _cc_ or _cc is None:
+                    continue
+                _cc_["hits"] = int(float(_r[_cc] or 0))
+                if _cn is not None and _r[_cn] not in (None, ""):
+                    _cc_["needed"] = int(float(_r[_cn]))
+                _mm = re.search(r"/\s*(\d+)\s*=", str(_r[_cp] or "")) if _cp is not None else None
+                if _mm:
+                    _cc_["den"] = int(_mm.group(1))
+                _cc_["verdict"] = str(_r[_cv_] or "").upper() if _cv_ is not None else ""
+        for _c in _rows:
+            _c["stale"] = _sheet_old
+        _tot["stale"] = _sheet_old
         _closed = _tot["untouched"] == 0                                                     # every parent of the school has an outcome: the school is finished
         for _c in _rows:
             _c["closed"] = _closed
@@ -1524,6 +1569,9 @@ for _ck in UNIVERSE:
     _thr = SCHOOL_THR_BY_NAME.get(_short(_ck.split("|")[0]), CLASS_THRESHOLD)
     _needed = math.ceil(round(_size * _thr, 6))          # true percentage rule: contributors / class size must be >= threshold (13/45 = 28.9% does NOT win, 14/45 = 31.1% does)
     _hits = int(np.nansum(_g["_hit"])) if _nd else 0
+    if _cov and "hits" in _cov:                          # list-checked sheet: contributors and the number needed are the sheet's own (bonus parent included)
+        _hits = _cov["hits"]
+        _needed = _cov.get("needed", _needed)
     _hhs = [h for h, c in _hh_class.items() if c == _ck]
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
     _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
@@ -1536,7 +1584,7 @@ for _ck in UNIVERSE:
         _rem = sum(1 for x in _states if x in _PENDING)
     _pbar = float(np.nanmean(_g["_pclear"])) if _nd >= 5 and _g["_pclear"].notna().any() else _overall_p
     _chance = _binom_tail(_rem, _pbar, _needed - _hits)
-    if _nd == 0:
+    if _nd == 0 and not (_cov and "hits" in _cov and _cov["complete"]):
         _st = "Not started"
     elif _hits >= _needed:
         _st = "Secured"
@@ -1547,8 +1595,8 @@ for _ck in UNIVERSE:
     else:
         _st = "At risk"
     _sch, _gr, _sec = _ck.split("|")
-    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": (_nd if _cov["closed"] else _cov["complete"]) if _cov else _nd,   # finished school: children whose parent bid (one bid per child), as in the sheet
-                       "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "nr": _cov["noreach"] if _cov else _refused, "rate": 100.0 * _hits / _size if _size else 0.0,
+    class_rows.append({"key": _ck, "label": _cls_label(_ck), "school": _short(_sch), "grade": int(_gr), "sec": _sec, "target": int(_target), "done": _cov["complete"] if (_cov and not _cov.get("stale")) else _nd,   # finished school: children whose parent bid (one bid per child), as in the sheet
+                       "size": _size, "needed": _needed, "thr": int(round(100 * _thr)), "hits": _hits, "rem": _rem, "refused": _refused, "nr": _cov["noreach"] if _cov else _refused, "rate": 100.0 * _hits / ((_cov or {}).get("den") or _size) if ((_cov or {}).get("den") or _size) else 0.0,
                        "chance": 1.0 if _st == "Secured" else (0.0 if _st == "Cannot reach" else _chance), "status": _st,
                        "incons": int(_sizes.nunique() > 1) if len(_sizes) else 0, "mean_bid": avg(_g["_bid"])})
 class_rows.sort(key=lambda r: (r["school"], r["grade"], r["sec"]))
@@ -1579,6 +1627,9 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
     _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
     _reach = _d + _ph["nr"]
     _cv = COV_SCHOOL.get(_sn)
+    if _cv and _cv.get("stale"):
+        _t = _cv["actual"]
+        _cv = None                                               # sheet older than the data: school totals come from the data
     if _cv:                                                      # list-checked sheet: actual parents, complete, and every other outcome
         _t, _d = _cv["actual"], _cv["complete"]
         _reach = _cv["touched"]
