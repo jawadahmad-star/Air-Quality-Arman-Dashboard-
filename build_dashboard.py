@@ -1576,7 +1576,7 @@ for _ck in UNIVERSE:
     _states = [_hh_state.get(int(h), "Not visited") for h in _hhs]
     _refused = sum(1 for x in _states if x in ("Refused", "Ineligible"))
     if _cov:
-        _rem = 0 if _cov["closed"] else max(_size - _cov["complete"] - _cov["final"] - _cov["sibling"], 0)     # a finished school has nobody left to try
+        _rem = _cov["untouched"] if not _cov.get("stale") else max(_size - _cov["complete"] - _cov["final"] - _cov["sibling"], 0)     # current sheet: only parents NOT TOUCHED yet are left (phone-off / not-picked parents have been tried and count as touched)
         _refused = _cov["final"]
     elif len(_sizes) or HAS_FRAME_CLASS:
         _rem = max(_size - _nd - _refused, 0)            # parents of the class with no final outcome yet (refusals can no longer contribute)
