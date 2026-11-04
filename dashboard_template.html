@@ -759,7 +759,7 @@ function funnelHTML(d){
 }
 function blocksHTML(rows){
   return `<div class="land-prog">` + rows.map(r => {
-    const hasT = r.target != null, p = hasT ? Math.min(r.pct, 100) : 0, c = barColor(hasT ? r.pct : 0);
+    const hasT = r.target != null, p = hasT ? Math.min(r.pct, 100) : 0, c = r.closed ? S(6) : barColor(hasT ? r.pct : 0);
     const pa = hasT && r.att ? Math.min(100 - p, Math.round(100 * r.att / r.target)) : 0;
     const ext = r.att != null ? `<div class="lc-sub" style="margin-top:6px"><strong>${r.att.toLocaleString()}</strong> more not interviewed (${r.detail ? esc(r.detail) : r.retry + ' to call again · ' + r.final + ' refused / wrong number'})<br><strong>${r.reach.toLocaleString()}</strong> children reached in all${hasT ? ` · ${r.reach_pct}% of ${r.target.toLocaleString()}` : ''}</div>` : '';
     return `<div class="land-card"><div class="lc-bin">${esc(r.bin)}</div><div class="lc-sub">${esc(r.sub||'')}</div>

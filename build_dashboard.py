@@ -1638,6 +1638,7 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
     _ph = _ph_by_key.pop(_nk(_sn), (None, {"nr": 0, "retry": 0, "final": 0}))[1]
     _reach = _d + _ph["nr"]
     _cv = COV_SCHOOL.get(_sn)
+    _sch_closed = bool(_cv and _cv.get("closed"))                # every parent has an outcome (NOT TOUCHED = 0): no more interviews possible
     if _cv and _cv.get("stale"):
         _t = _cv["actual"]
         _cv = None                                               # sheet older than the data: school totals come from the data
@@ -1646,7 +1647,7 @@ for _sn in cls_schools + sorted(_short(l) for l in SCHOOL_LABEL.values() if _sho
         _reach = _cv["touched"]
         _ph = {"nr": _reach - _d, "retry": _cv["off"] + _cv["notpicked"], "final": _cv["final"]}
     school_blocks.append({"bin": _sn, "sub": f"{len(_cr)} classes · {sum(1 for r in _cr if r['status'] == 'Secured')} secured" if _cr else "Not started yet",
-                          "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if _d >= _t > 0 else ("In Progress" if _d else "Not Started"),
+                          "done": _d, "target": max(_t, 1), "pct": pct(_d, max(_t, 1), 0), "status": "Completed" if (_sch_closed or _d >= _t > 0) else ("In Progress" if _d else "Not Started"), "closed": _sch_closed,
                           "att": _ph["nr"], "retry": _ph["retry"], "final": _ph["final"], "reach": _reach, "reach_pct": pct(_reach, max(_t, 1), 0), "par": _par,
                           **({"detail": " · ".join(f"{_cv[k]} {l}" for k, l in (("refused", "refused"), ("off", "phone off"), ("notpicked", "not picked"), ("wrong", "wrong number"), ("invalid", "invalid number"), ("sibling", "via sibling")) if _cv[k])} if _cv else {})})
 for _k, (_sn, _ph) in _ph_by_key.items():                      # schools with phone calls but no field interview yet (class sizes not known: no target)
