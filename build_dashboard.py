@@ -903,8 +903,19 @@ try:
                     _tot[k] += _c[k]
         # the sheet's own Contribution tab (contributed after the bonus-parent rule, needed, verdict) is what the dashboard shows for this school
         _stamp = re.search(r"refreshed\s+(\d+)-([A-Za-z]{3})-(\d{4})", str(_ws["A1"].value or ""))
-        _data_day = max((datetime.fromtimestamp(_f.stat().st_mtime) for _f in HERE.glob("*.dta")), default=None)
-        _sheet_old = bool(_stamp and _data_day and datetime.strptime("-".join(_stamp.groups()), "%d-%b-%Y").date() < _data_day.date())   # sheet is older than the data: keep the data's own contributor count
+        # sheet is stale only when THIS school has a form submitted after the sheet's main-survey export (a finished school whose data
+        # did not change keeps its checked sheet even when the .dta file is newer)
+        _exp = re.search(r"main survey export\s+(\d+)-([A-Za-z]{3})\s+(\d{1,2}:\d{2})", str(_ws["A1"].value or ""))
+        _sheet_cut = None
+        if _exp and _stamp:
+            _sheet_cut = datetime.strptime(f"{_exp.group(1)}-{_exp.group(2)}-{_stamp.group(3)} {_exp.group(3)}", "%d-%b-%Y %H:%M")
+        elif _stamp:
+            _sheet_cut = datetime.strptime("-".join(_stamp.groups()), "%d-%b-%Y") + pd.Timedelta(days=1)
+        _sub_col = next((c for c in ("submissiondate", "SubmissionDate") if c in D.columns), None)
+        _sch_last = None
+        if _sub_col:
+            _sch_last = pd.to_datetime(D.loc[D["_sch"].map(_short) == _sn, _sub_col], errors="coerce", format="mixed").max()
+        _sheet_old = bool(_sheet_cut is not None and pd.notna(_sch_last) and _sch_last > _sheet_cut)
         if _sheet_old:
             say(f"Coverage  : {_cf.name} was refreshed {_stamp.group(0)[10:]}, older than the data - contributor counts come from the data until the sheet is refreshed")
         if "Contribution" in _wbk.sheetnames and not _sheet_old:
