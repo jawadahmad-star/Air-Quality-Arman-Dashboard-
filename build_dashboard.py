@@ -326,6 +326,8 @@ for _v, _l in CH.get("which_class_2", []):
         CLASS_GRADE[_v] = int(_g.group())
 STUDY_GRADES = sorted(CLASS_GRADE.values()) or [4, 5, 6]
 SCHOOL_LABEL = dict(CH.get("school_list", []))                  # school_list code -> English school name
+_EXCL = {int(c) for c in CFG.get("exclude_schools", [])}         # schools dropped from the study (config exclude_schools): not shown anywhere
+SCHOOL_LABEL = {k: v for k, v in SCHOOL_LABEL.items() if int(k) not in _EXCL}
 say(f"Form rules : class rule {PCTS} of parents · bids up to Rs {CAPS} · time-pref base Rs {TP_BASE:,} · top-up Rs {TOPUP_BASE:,} per child · "
     f"classes {STUDY_GRADES[0]}-{STUDY_GRADES[-1]} · {len(SCHOOL_LABEL)} schools in the form's school list")
 
@@ -535,7 +537,7 @@ LIST_ROWS, LIST_SIZE, LIST_CLASSES = {}, {}, {}           # school label -> [(na
 try:
     for _td in sorted(HERE.parent.glob("*/*/Typed_Lists")):
         _tw = {w for w in re.sub(r"[^a-z0-9 ]", " ", _td.parent.name.lower().replace("_", " ")).split() if not w.isdigit() and w not in ("emis", "gghs", "ghs", "school", "girls", "high", "govt", "cdg", "newly", "upgraded")}
-        _lab = next((l for l in SCHOOL_LABEL.values() if len(_tw & set(re.sub(r"[^a-z0-9 ]", " ", l.lower()).split())) >= 2), None)
+        _lab = next((l for l in SCHOOL_LABEL.values() if sum(any(difflib.SequenceMatcher(None, w_, v_).ratio() >= 0.8 for v_ in re.sub(r"[^a-z0-9 ]", " ", l.lower()).split()) for w_ in _tw) >= 2), None)   # fuzzy: THATTHI/THATHI, SAMNABAD/SAMANABAD
         if not _lab:
             continue
         for _xf in sorted(_td.glob("CLASS *.xlsx")):
@@ -2588,7 +2590,7 @@ def clean(o):
 payload = json.dumps(clean(DATA), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 payload = payload.replace("@PCT@", PCTM).replace("@CAP@", CAPS)          # tokens used in dashboard_text.py
 # last-line PII scan of the serialised payload
-_bad = re.findall(r"\b03\d{9}\b|\b\+?92\d{10}\b|[\w.]+@[\w.]+\.\w+", payload)
+_bad = re.findall(r"(?<![\d.])03\d{9}(?!\d)|(?<![\d.])\+?92\d{10}(?!\d)|[\w.]+@[\w.]+\.\w+", payload)   # not digits after a decimal point (0.0308... is a share, not a phone)
 _bad = [b for b in _bad if "example" not in b]
 if _bad:
     sys.exit(f"PII pattern found in payload ({_bad[:3]}...): build stopped.")
