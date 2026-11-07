@@ -2474,9 +2474,12 @@ if PH["calls"]:
     overview["blocks"][-1:-1] = [
             {"t": "note", "html": "<strong>📞 Phone Survey</strong> · parents are called first and the ones who agree are visited. Kept apart from the field interviews above: phone calls are never counted in the completed interviews, attempts or non-response."},
             {"t": "kpis", "d": _ph_kp},
-            {"t": "grid", "cols": 2, "cards": [
-                card("hbar", "phOut", "Phone Call Outcome", "Final outcome per parent (a parent called several times counts once; an agreed call wins, otherwise the latest call)", {"items": _ph_dist, "base": PH["nr"]}, opt={"color": 2, "fmt": "n"}),
-                card("bar", "phDay", "Calls per Day", "Phone calls made on each day", {"items": [{"l": x["l"], "n": x["n"], "p": pct(x["n"], max(PH["calls"], 1))} for x in _ph_day], "base": PH["calls"]}, opt={"color": 1, "fmt": "n"})]},
+            {"t": "grid", "cols": 1, "cards": [
+                card("hbar", "phOut", "Phone Call Outcome", "Final outcome per parent (a parent called several times counts once; an agreed call wins, otherwise the latest call)", {"items": _ph_dist, "base": PH["nr"]}, opt={"color": 2, "fmt": "n"}, full=True)]},
+            {"t": "grid", "cols": 1, "cards": [       # full-width line (like Daily Completed Interviews): one date per day squeezed into a half card made the labels overlap
+                card("lines", "phDay", "Calls per Day", f"Phone calls made on each day · {PH['calls']:,} calls in total",
+                     {"x": [x["l"] for x in _ph_day], "series": [{"name": "Calls", "slot": 1, "y": [x["n"] for x in _ph_day], "fill": True, "pts": True, "labels": True}]},
+                     opt={"yfmt": "n"}, full=True)]},
     ]
 
 # ---- tabs removed on request (Field Ops, Fairness, Patience)
