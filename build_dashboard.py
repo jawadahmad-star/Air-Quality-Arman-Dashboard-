@@ -640,7 +640,8 @@ def _list_match(sch, name, parent, gtxt, phones=(), hint=None, sib=""):
 
 
 LIST_MATCH = {}                                           # (row, child no.) -> (grade, section)
-LIST_MISS = []                                            # children of a list school who are not in its list
+LIST_MISS = []                                            # children of a list school who are not in its list and could not be placed
+LIST_OFF = []                                             # off-list children placed in the class selected / grade typed by the enumerator
 if LIST_ROWS:
     _lpar = (D["fname"].fillna("").astype(str) + " " + D["lname"].fillna("").astype(str)) if "fname" in D else pd.Series("", index=D.index)
     for _i in range(len(D)):
@@ -659,6 +660,20 @@ if LIST_ROWS:
             _hint = (int(D["_gradeN"].iat[_i]), str(D["_sec"].iat[_i]).strip().upper()) if pd.notna(D["_gradeN"].iat[_i]) else None
             _mt = _list_match(_lab, _nmv, _lpar.iat[_i], _gt, _ph, _hint if _k <= 1 else None,
                              " ".join(_lnm(D[f"name_child_{j_}"].iat[_i]) for j_ in range(1, 21) if j_ != _k and f"name_child_{j_}" in D.columns))   # the enumerator's class is the sampled (first) child's
+            if not _mt:
+                # child not on the school's list (new / off-list): count it in the class the enumerator selected (sampled child)
+                # or, for a sibling, the grade typed for it; section = the only section of that grade, else the one typed / selected
+                _tt = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", str(_gt), flags=re.I)
+                _tg = _grade_of(_tt)
+                _og = _hint[0] if (_k <= 1 and _hint and _hint[0] in STUDY_GRADES) else (_tg if _tg in STUDY_GRADES else None)
+                if _og is not None:
+                    _secs = sorted({s_ for g_, s_ in LIST_CLASSES.get(_lab, ()) if g_ == _og})
+                    _tsec = (re.search(r"\d+\s*[-_ ]?\s*([A-Za-z])\b", _tt) or [None, None])[1]
+                    _cand = [x_ for x_ in ((_tsec or "").upper(), (_hint[1] if (_hint and _hint[0] == _og) else "")) if x_ in _secs]
+                    _osec = _secs[0] if len(_secs) == 1 else (_cand[0] if _cand else None)
+                    if _osec is not None:
+                        _mt = (int(_og), _osec)
+                        LIST_OFF.append((int(D["_hh"].iat[_i]) if pd.notna(D["_hh"].iat[_i]) else None, _mt))
             if _mt:
                 LIST_MATCH[(_i, _k or 1)] = _mt
             else:
@@ -673,7 +688,7 @@ if LIST_ROWS:
         D.iat[_i, D.columns.get_loc("_sec")] = _hit[1]
     D["_ckey"] = [_ckey_of(a_, b_, c_) if (pd.notna(a_) and pd.notna(b_)) else np.nan for a_, b_, c_ in zip(D["_sch"], D["_gradeN"], D["_sec"])]
     D["_cls"] = D["_ckey"].map(lambda k: _cls_label(k) if pd.notna(k) else np.nan)
-    say(f"Class lists: {len(LIST_MATCH)} child record(s) placed in their section from the typed lists, {len(LIST_MISS)} not found in a list (not counted in any class), hh_id: {[h_ for h_, _ in LIST_MISS]}")
+    say(f"Class lists: {len(LIST_MATCH) - len(LIST_OFF)} child record(s) placed in their section from the typed lists, {len(LIST_OFF)} off-list child(ren) counted in the enumerator's class / typed grade: {LIST_OFF}, {len(LIST_MISS)} could not be placed (not counted in any class), hh_id: {[h_ for h_, _ in LIST_MISS]}")
 
 # ---- repeat group: a wide export carries the per-child fields as <name>_1, <name>_2 ...
 K_MAX = 0
