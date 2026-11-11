@@ -763,7 +763,8 @@ if LIST_ROWS:                                             # typed lists decide t
         if _s_ in LIST_ROWS:
             _mt = LIST_MATCH.get((int(_r_), int(_k_)))
             _tx = re.sub(r"[()]", " ", str(D[f"grade_child_{_k_}"].iat[int(_r_)])) if (f"grade_child_{_k_}" in D.columns) else ""
-            if any(w_ in str(_s_).upper() for w_ in TEXT_GRADE_SCHOOLS) and _grade_of(_tx) in STUDY_GRADES and _sec_of(_tx):
+            if any(w_ in str(_s_).upper() for w_ in TEXT_GRADE_SCHOOLS) and _grade_of(_tx) in STUDY_GRADES and _sec_of(_tx) \
+                    and (not LIST_CLASSES.get(_s_) or any(int(g_) == _grade_of(_tx) and str(x_).upper() == _sec_of(_tx) for g_, x_ in LIST_CLASSES[_s_])):   # a typo like "5 z" is not a section
                 _kg.append(float(_grade_of(_tx))); _ks.append(_sec_of(_tx))      # the cleaned grade_child text in the .dta already carries the class-list section
                 continue
             if any(w_ in str(_s_).upper() for w_ in TEXT_GRADE_SCHOOLS) and _grade_of(_tx) in STUDY_GRADES and int(_k_) == 1 and ("enum_section" in D.columns) and str(D["enum_section"].iat[int(_r_)]).strip():
