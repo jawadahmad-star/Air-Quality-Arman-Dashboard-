@@ -989,12 +989,12 @@ def _cov_of(school, grade, sec=""):
 
 
 def _class_size(ck):
-    _ls = LIST_SIZE.get((str(ck).split("|")[0], int(str(ck).split("|")[1]), str(ck).split("|")[2]))
-    if _ls:                                              # typed class list: its rows are the parents of the section
-        return _ls
     _cv = _cov_of(str(ck).split("|")[0], str(ck).split("|")[1], str(ck).split("|")[2])
-    if _cv:                                              # list-checked sheet: actual parents in the class
+    if _cv and not _cv.get("stale"):                     # list-checked sheet first: ACTUAL = list + survey additions - children who left school
         return _cv["actual"]
+    _ls = LIST_SIZE.get((str(ck).split("|")[0], int(str(ck).split("|")[1]), str(ck).split("|")[2]))
+    if _ls:                                              # no sheet: typed class list rows are the parents of the section
+        return _ls
     _s = KIDC.loc[KIDC["_ckey"] == ck, "_tpar"].dropna()
     if len(_s):
         return int(_s.median())
@@ -1504,7 +1504,7 @@ proj_finish = next_workdays(last_ts, days_left)[-1] if (n_field_days and days_le
 META = {
     "title": CFG["title"], "subtitle": CFG["subtitle"], "location": CFG["location"],
     "mode": mode, "built": datetime.now().strftime("%d %b %Y, %H:%M"), "built_iso": datetime.now().isoformat(timespec="minutes"),
-    "n_complete": N_C, "target": N_TARGET, "pct_complete": pct(N_C, N_TARGET, 0), "n_attempts": N_ATT,
+    "n_complete": N_C, "target": N_TARGET, "pct_complete": pct(len(KIDC) if COV_SCHOOL else N_C, N_TARGET, 0), "n_attempts": N_ATT,
     "field_days": n_field_days, "last_date": fdate(last_ts) if last_ts is not None else "—",
     "first_date": fdate(first_ts) if first_ts is not None else "—",
     "domain": CFG.get("domain", ""), "recon": recon,
@@ -1679,8 +1679,9 @@ if _nosch:
 say("School progress: " + " | ".join(f"{b['bin']} {b['done']}/{b['target']}" for b in school_blocks))
 n_cls_done = sum(1 for r in class_rows if r["rem"] == 0)                       # every parent has a final outcome
 n_cls_80 = sum(1 for r in class_rows if 0 < r["rem"] <= 5)
+say(f"Overall tile: {N_C} parents / {len(KIDC)} children | " + " | ".join(f"{b['bin']} {b['par']} parents / {b['done']} children" for b in school_blocks if b.get("par") or b["done"]))
 ov_kpis = [
-    K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"Parents interviewed, all schools together · {META['pct_complete']:.0f}% of {N_TARGET:,} target · {len(KIDC):,} children covered (a parent with children in two classes counts in each class)", "up", "green"),
+    K("✅", fmt_n(N_C), "Completed Interviews · Overall", f"{N_C:,} parents interviewed · {len(KIDC):,} children covered in total (a parent with children in two classes counts in each class) · {META['pct_complete']:.0f}% of the {N_TARGET:,}-children target (children covered ÷ children in the classes, after removing children who left school). By school (parents / children): " + " | ".join(f"{b['bin']} {b['par']} / {b['done']}" for b in school_blocks if b.get("par") or b["done"]), "up", "green"),
     *[K("🏫", fmt_n(b["done"]), f"Completed · {b['bin']}", f"{b['par']} unique parents · children counted once per child, so a parent with 2-3 children is counted 2-3 times · {b['pct']:.0f}% of {b['target']:,} children", "up", "teal") for b in school_blocks if b["done"] and b["target"]],
     K("🎯", fmt_n(remaining), "Households Remaining",
       (f"{N_TARGET:,} children in the classes − {len(KIDC):,} interviewed − {COV_EXTRA} reached but not interviewed ({', '.join(COV_SCHOOL)}: refused, wrong number, phone off, not picked up) = {remaining:,} still to reach" if COV_SCHOOL else
@@ -1741,7 +1742,7 @@ overview = {
                  {"x": [x["d"] for x in daily], "series": [{"name": "Completed", "slot": 2, "y": _vals, "fill": True, "pts": True, "labels": True}]},
                  opt={"yfmt": "n"}, full=True)]},
         {"t": "grid", "cols": 3, "cards": [
-            card("gauge", "ovProg", "Overall Progress vs Target", f"Completed interviews against the {N_TARGET:,} parents in the {n_cls} classes seen so far" if FRAME_IS_POOL else f"Completed interviews against the {N_TARGET:,}-household frame", {"done": N_C, "target": N_TARGET}),
+            card("gauge", "ovProg", "Overall Progress vs Target", (f"Children covered ({len(KIDC):,}, from {N_C:,} parents) against the {N_TARGET:,} children in the {n_cls} classes (children who left school removed)" if COV_SCHOOL else (f"Completed interviews against the {N_TARGET:,} parents in the {n_cls} classes seen so far" if FRAME_IS_POOL else f"Completed interviews against the {N_TARGET:,}-household frame")), {"done": len(KIDC) if COV_SCHOOL else N_C, "target": N_TARGET}),
             card("donut", "ovArm", "Completed by Study Arm", "Control · Video 1 · Video 2",
                  {"items": [{"l": ARM_LAB[v], "n": arm_done[v], "p": pct(arm_done[v], N_C)} for v in (0, 1, 2)], "base": N_C}, opt={"colors": [7, 3, 5], "fmt": "n"}),
             card("hbar", "ovDisp", "Attempt Disposition", "Outcome of every fieldwork attempt recorded so far", {"items": disp, "base": N_ATT_ALL}, var="status_survey", opt={"color": 2, "fmt": "n"})]},
